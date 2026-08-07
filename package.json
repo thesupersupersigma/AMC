@@ -1,0 +1,20 @@
+{
+  "name": "amc",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:file": "vite build --mode singlefile",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@vercel/node": "^5.1.14",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.19",
+    "vite-plugin-pwa": "^0.21.2",
+    "vite-plugin-singlefile": "^2.0.3"
+  }
+}

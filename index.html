@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101010">
+<title>Music</title>
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+</head>
+<body>
+
+<div id="empty">
+  <div class="box">
+    <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+    </svg>
+    <h1>Your library starts here</h1>
+    <p>Point this at the folder that holds your music. Nested artist and album folders are scanned in place, tags and cover art included.</p>
+    <p>Chrome will ask you to confirm the folder before it reads anything. Nothing leaves this device &mdash; your music is never uploaded anywhere.</p>
+    <button class="btn-primary" id="pickBtn" type="button">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+      Choose music folder
+    </button>
+    <div class="fine">Press Ctrl&nbsp;+&nbsp;Shift&nbsp;+&nbsp;D at any time to open the activity log.</div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <aside id="sidebar">
+    <div class="wordmark">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      <span>Music</span>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sect">Playlists</div>
+    <div class="pl-scroll" id="plList"></div>
+    <div class="sb-foot">
+      <button class="foot-btn" id="rescanBtn" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+        Rescan library
+      </button>
+      <button class="foot-btn" id="logBtn" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5"/><circle cx="12" cy="16.5" r=".9" fill="currentColor"/><path d="M10.3 3.9L2.6 17.3A2 2 0 004.3 20.3h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        Activity log
+        <span class="dot" id="logDot" hidden></span>
+      </button>
+    </div>
+  </aside>
+  <main id="main">
+    <div id="topbar">
+      <div id="crumb">Albums</div>
+      <div class="spacer"></div>
+      <div id="scanchip" hidden><span class="spinner"></span><span id="scanText">Scanning</span></div>
+      <label class="searchbox">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20.4 20.4l-3.9-3.9"/></svg>
+        <input id="q" type="text" placeholder="Search your library" aria-label="Search your library by song, artist or album" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<div id="playerbar" hidden>
+  <div class="pb-left">
+    <button class="pb-btn" id="btnShuffle" type="button" title="Shuffle the queue" aria-label="Shuffle the queue"></button>
+    <button class="pb-btn" id="btnPrev" type="button" title="Play the previous track" aria-label="Play the previous track"></button>
+    <button class="pb-btn big" id="btnPlay" type="button" title="Play" aria-label="Play"></button>
+    <button class="pb-btn" id="btnNext" type="button" title="Play the next track" aria-label="Play the next track"></button>
+    <button class="pb-btn repeat-badge" id="btnRepeat" type="button" title="Repeat the queue" aria-label="Repeat the queue"></button>
+  </div>
+  <div class="pb-center">
+    <div id="pbArt"></div>
+    <div class="pb-info">
+      <div id="pbTitle" class="trunc">Nothing playing</div>
+      <div id="pbArtist" class="trunc">Pick a song to start</div>
+      <div class="pb-scrub">
+        <span class="tt" id="pbElapsed">0:00</span>
+        <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within the track">
+        <span class="tt r" id="pbRemain">-0:00</span>
+      </div>
+    </div>
+  </div>
+  <div class="pb-right">
+    <button class="pb-btn" id="btnQueue" type="button" title="Show what plays next" aria-label="Show what plays next"></button>
+    <div class="volwrap">
+      <button class="pb-btn" id="btnMute" type="button" title="Mute the audio" aria-label="Mute the audio"></button>
+      <input id="vol" type="range" min="0" max="100" value="100" step="1" aria-label="Set the volume">
+    </div>
+  </div>
+</div>
+
+<aside id="upnext" aria-label="Up next">
+  <header>
+    <h3>Up next</h3>
+    <button class="link" id="qClear" type="button">Clear</button>
+    <button class="pb-btn" id="qClose" type="button" title="Hide the queue" aria-label="Hide the queue"></button>
+  </header>
+  <div id="queueList"></div>
+</aside>
+
+<div id="scrim" hidden></div>
+<div id="errpanel" hidden role="dialog" aria-label="Activity log" aria-modal="true">
+  <header>
+    <h3>Activity log</h3>
+    <button class="pill-ghost" id="errCopy" type="button">Copy log</button>
+    <button class="pill-ghost" id="errClear" type="button">Clear log</button>
+    <button class="pb-btn" id="errClose" type="button" title="Close the log" aria-label="Close the log"></button>
+  </header>
+  <div id="errlist"></div>
+  <footer>
+    <span class="hint">Everything that failed to parse, decode or save shows up here. Press Ctrl + Shift + D to toggle this panel.</span>
+  </footer>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<div id="swUpdate" hidden role="status">
+  <span>A new version is ready.</span>
+  <button id="swReload" type="button">Reload</button>
+  <button id="swLater" type="button" class="ghost">Later</button>
+</div>
+
+<input id="picker" type="file" webkitdirectory directory multiple hidden aria-hidden="true" tabindex="-1">
+<input id="m3upicker" type="file" accept=".m3u,.m3u8" hidden aria-hidden="true" tabindex="-1">
+<audio id="audio" preload="metadata"></audio>
+<audio id="probe" preload="metadata" muted></audio>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

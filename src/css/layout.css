@@ -1,0 +1,34 @@
+/* The shell: empty state, sidebar / main split, topbar, scrolling view. */
+
+#empty{
+  position:fixed;inset:0;display:grid;place-items:center;padding:24px;z-index:5;
+  background:radial-gradient(1100px 520px at 50% 8%,#211014 0%,var(--bg) 62%);
+}
+#empty .box{max-width:430px;text-align:center}
+#empty .glyph{width:56px;height:56px;margin:0 auto 18px;color:var(--accent)}
+#empty h1{font-size:25px;letter-spacing:-.02em;margin:0 0 10px;font-weight:600}
+#empty p{color:var(--text-dim);margin:0 0 8px;font-size:12.5px;line-height:1.55}
+#empty .btn-primary{
+  margin-top:18px;display:inline-flex;align-items:center;gap:8px;
+  background:var(--accent);color:#fff;font-weight:600;font-size:13.5px;
+  padding:10px 20px;border-radius:999px;
+}
+#empty .btn-primary:hover{filter:brightness(1.09)}
+#empty .fine{margin-top:16px;font-size:11.5px;color:#6d6d72}
+
+#app{display:flex;height:100vh;width:100vw}
+#sidebar{
+  width:var(--sidebar-w);flex:0 0 var(--sidebar-w);
+  margin:10px 0 10px 10px;background:var(--panel);border-radius:var(--radius);
+  display:flex;flex-direction:column;overflow:hidden;position:relative;z-index:6;
+}
+#sidebar.dropping{box-shadow:inset 0 0 0 2px var(--accent)}
+
+#main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+#topbar{
+  height:52px;flex:0 0 52px;display:flex;align-items:center;gap:14px;
+  padding:0 26px 0 22px;
+}
+#crumb{font-size:19px;font-weight:700;letter-spacing:-.02em}
+#topbar .spacer{flex:1}
+#view{flex:1;overflow-y:auto;padding:0 26px 118px 22px;scroll-behavior:auto}
