@@ -7,7 +7,8 @@ import type { AnyTrack, ConnectedFolder, FileTrack, PeakData, VirtualTrack } fro
 import { S, refOf } from '../state';
 import { audio } from '../audio/engine';
 import { analyzeForSplit } from '../audio/analysis';
-import { bucketPeaks, loadPeaks, savePeaks } from '../audio/peaks';
+import { bucketPeaks, generateSparseFlacPeaks, loadPeaks, savePeaks } from '../audio/peaks';
+import { extOf } from '../parse/bytes';
 import { buildCueText } from '../parse/cue';
 import { stripRoot } from '../fs/amcdir';
 import { folderById } from '../fs/folders';
@@ -165,19 +166,28 @@ export async function waveformTrackChanged(): Promise<void> {
   void generatePeaks(folder, key, src.path, src.file, curDuration);
 }
 
-/** Lazy one-time decode for the waveform. Codec the browser can't decode →
-    no waveform, plain slider; nothing else changes. */
+/** Lazy one-time peak generation. Small files decode fully (streaming path,
+    unchanged); multi-GB FLACs go through the sparse WebCodecs sampler,
+    which never holds the file in memory. Where neither applies — an
+    oversized non-FLAC, or a browser without WebCodecs FLAC — nothing
+    changes: no waveform, plain slider. */
 async function generatePeaks(folder: ConnectedFolder, key: string, path: string, file: File | undefined, durationHint: number): Promise<void> {
-  if (!file || generating.has(key) || file.size > MAX_DECODE_BYTES) return;
+  if (!file || generating.has(key)) return;
   generating.add(key);
   try {
-    const rate = 8000;
-    const raw = await file.arrayBuffer();
-    const ctx = new OfflineAudioContext(1, Math.max(rate, Math.ceil(Math.max(1, durationHint || 60) * rate)), rate);
-    const decoded = await ctx.decodeAudioData(raw);
-    const channels: Float32Array[] = [];
-    for (let ch = 0; ch < decoded.numberOfChannels; ch++) channels.push(decoded.getChannelData(ch));
-    const data: PeakData = { version: 1, duration: decoded.duration, pairs: bucketPeaks(channels, 1500) };
+    let data: PeakData | null = null;
+    if (file.size > MAX_DECODE_BYTES) {
+      if (extOf(file.name) === 'flac') data = await generateSparseFlacPeaks(file);
+      if (!data) return; /* unsupported or defeated — today's skip behaviour */
+    } else {
+      const rate = 8000;
+      const raw = await file.arrayBuffer();
+      const ctx = new OfflineAudioContext(1, Math.max(rate, Math.ceil(Math.max(1, durationHint || 60) * rate)), rate);
+      const decoded = await ctx.decodeAudioData(raw);
+      const channels: Float32Array[] = [];
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) channels.push(decoded.getChannelData(ch));
+      data = { version: 1, duration: decoded.duration, pairs: bucketPeaks(channels, 1500) };
+    }
     savePeaks(folder, path, data);
     if (curKey === key) {
       curPeaks = data;
