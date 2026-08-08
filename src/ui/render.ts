@@ -228,7 +228,7 @@ export function wireLibrary(): void {
     }
     const list = S.visible.map((u) => S.byUid[u]).filter(Boolean);
     const idx = list.findIndex((t) => t.uid === uid);
-    if (idx >= 0) playList(list, idx);
+    if (idx >= 0) playList(list, idx, { attemptTarget: true });
   });
 
   view.addEventListener('keydown', (e) => {
@@ -239,7 +239,7 @@ export function wireLibrary(): void {
       const uid = row.getAttribute('data-uid') || '';
       const list = S.visible.map((u) => S.byUid[u]).filter(Boolean);
       const idx = list.findIndex((t) => t.uid === uid);
-      if (idx >= 0) playList(list, idx);
+      if (idx >= 0) playList(list, idx, { attemptTarget: true });
     }
     if (e.key === 'ContextMenu') {
       e.preventDefault();

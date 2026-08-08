@@ -5,11 +5,36 @@
    every visit", which is what makes folders stick across restarts. */
 
 import type { Capability, FsBackend } from '../types';
-import { AUDIO_EXT, extOf } from '../parse/bytes';
+import { AUDIO_EXT, extOf, isJunkFile } from '../parse/bytes';
 import { SIDECAR_DIRS } from './amcdir';
 import { logErr } from '../ui/log';
 
-const AMC_DIR = '.AMC';
+/* The sidecar directory is named identically on every platform. A dot
+   prefix buys nothing on Windows — the File System Access API cannot set
+   the hidden attribute, and Windows does not hide dot-names — so the name
+   itself carries the warning. Folders that already have a ".AMC" from an
+   earlier version are adopted in place, never orphaned. */
+export const AMC_DIR = 'AMC DO NOT DELETE';
+export const AMC_DIR_LEGACY = '.AMC';
+
+const README_NAME = 'README.txt';
+const README_TEXT = [
+  'This folder belongs to AMC, the local music player. It is the sidecar',
+  'for the music folder it sits in: playlists, lyrics, cue sheets and',
+  'settings live here, next to the music, so the folder stays portable.',
+  '',
+  'If you delete this folder, AMC recreates it on the next scan — but',
+  'only some of what was inside can be rebuilt:',
+  '',
+  'Safe to delete (regenerable caches):',
+  '  artwork/   catalog/   peaks/',
+  '',
+  'User data — CANNOT be recovered if deleted:',
+  '  playlists/   cues/   lyrics/   notes/   overrides.json',
+  '',
+  'settings.json and library.json are rebuilt by AMC as needed.',
+  '',
+].join('\n');
 
 /** Opens the OS directory picker. Must be called from a user gesture.
     Returns null when the user cancels. */
@@ -64,11 +89,11 @@ export class FsaBackend implements FsBackend {
   private async walk(dir: FileSystemDirectoryHandle, prefix: string, out: { path: string; file: File }[], depth: number): Promise<void> {
     if (depth > 12) return;
     for await (const [name, handle] of dir.entries()) {
-      /* Dot entries hold the sidecar and editor droppings, never audio. */
-      if (name.charAt(0) === '.') continue;
+      /* The sidecar, dot entries and OS droppings never hold library audio. */
+      if (name.charAt(0) === '.' || name === AMC_DIR) continue;
       if (handle.kind === 'directory') {
         await this.walk(handle as FileSystemDirectoryHandle, prefix + '/' + name, out, depth + 1);
-      } else if (AUDIO_EXT.indexOf(extOf(name)) >= 0) {
+      } else if (!isJunkFile(name) && AUDIO_EXT.indexOf(extOf(name)) >= 0) {
         try {
           const file = await (handle as FileSystemFileHandle).getFile();
           out.push({ path: prefix + '/' + name, file: file });
@@ -89,9 +114,37 @@ export class FsaBackend implements FsBackend {
     return parts;
   }
 
+  /** The sidecar directory name for THIS folder: the current name when
+      present, an adopted legacy ".AMC" otherwise, minted fresh only when
+      creation is requested. Cached once resolved. */
+  private amcName: string | null = null;
+  private async resolveAmcName(create: boolean): Promise<string | null> {
+    if (this.amcName) return this.amcName;
+    try {
+      await this.root.getDirectoryHandle(AMC_DIR);
+      this.amcName = AMC_DIR;
+      return this.amcName;
+    } catch {
+      /* not present under the current name */
+    }
+    try {
+      await this.root.getDirectoryHandle(AMC_DIR_LEGACY);
+      this.amcName = AMC_DIR_LEGACY;
+      return this.amcName;
+    } catch {
+      /* no legacy sidecar either */
+    }
+    if (!create) return null;
+    await this.root.getDirectoryHandle(AMC_DIR, { create: true });
+    this.amcName = AMC_DIR;
+    return this.amcName;
+  }
+
   private async sidecarDir(create: boolean, sub: string[]): Promise<FileSystemDirectoryHandle | null> {
     try {
-      let dir = await this.root.getDirectoryHandle(AMC_DIR, { create: create });
+      const name = await this.resolveAmcName(create);
+      if (!name) return null;
+      let dir = await this.root.getDirectoryHandle(name, { create: create });
       for (const part of sub) dir = await dir.getDirectoryHandle(part, { create: create });
       return dir;
     } catch {
@@ -162,7 +215,31 @@ export class FsaBackend implements FsBackend {
   }
 
   async ensureSidecarLayout(): Promise<void> {
-    const amc = await this.root.getDirectoryHandle(AMC_DIR, { create: true });
+    const name = await this.resolveAmcName(true);
+    const amc = await this.root.getDirectoryHandle(name as string, { create: true });
     for (const sub of SIDECAR_DIRS) await amc.getDirectoryHandle(sub, { create: true });
+    /* The README says what this folder is, that AMC recreates it, and which
+       parts are user data. Written once; an existing copy is left alone. */
+    let hasReadme = true;
+    try {
+      await amc.getFileHandle(README_NAME);
+    } catch {
+      hasReadme = false;
+    }
+    if (!hasReadme) {
+      const fh = await amc.getFileHandle(README_NAME, { create: true });
+      const w = await fh.createWritable();
+      try {
+        await w.write(README_TEXT);
+      } catch (e) {
+        try {
+          await w.abort();
+        } catch {
+          /* the swap file is discarded either way */
+        }
+        throw e;
+      }
+      await w.close();
+    }
   }
 }

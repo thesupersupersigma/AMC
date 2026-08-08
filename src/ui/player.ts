@@ -2,7 +2,7 @@
    restore-last-track. */
 
 import type { AnyTrack, RowTrack, TrackRec } from '../types';
-import { S, PREFS, FULL, coverURL, isPlayableTrack, libraryTracks, refOf, releaseFullArt, savePrefs } from '../state';
+import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
 import { audio, createTrackURL, revokeCurrentURL } from '../audio/engine';
 import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
@@ -42,13 +42,19 @@ function buildOrder(startIndex: number): void {
   S.qi = 0;
 }
 
-export function playList(tracks: RowTrack[], index: number): void {
-  const playable = (tracks || []).filter(isPlayableTrack);
+export function playList(tracks: RowTrack[], index: number, opts?: { attemptTarget?: boolean }): void {
+  const target = tracks[index];
+  /* Tracks whose codec already failed to decode this session stay out of
+     the queue so playback never stalls on them. A track the user activated
+     directly (double-click, Enter, "Play from…") is still attempted — the
+     result is logged, and success withdraws the codec verdict. Play and
+     Shuffle buttons pass no flag: their target is just "start here". */
+  const attempt = !!(opts && opts.attemptTarget);
+  const playable = (tracks || []).filter(isPlayableTrack).filter((t) => (attempt && t === target) || !isCodecFailed(t.codec));
   if (!playable.length) {
     toast('Nothing here can be played from this folder');
     return;
   }
-  const target = tracks[index];
   let start = playable.indexOf(target as AnyTrack & { file: File });
   if (start < 0) start = 0;
   S.baseQueue = playable;
@@ -125,6 +131,20 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
   });
   savePrefs();
   render();
+}
+
+/** A genuine decode failure for this track's fourcc: mark the codec for the
+    session (unless a sibling with the same fourcc already played — then it
+    is one broken file, not a missing decoder) and badge every track sharing
+    it. Never pre-emptive — only an actual attempt lands here. */
+function noteCodecFailure(t: AnyTrack): void {
+  if (!markCodecFailed(t.codec)) return;
+  logErr(
+    'playback',
+    'This browser could not decode ' + codecLabel(t.codec as string) + ' (' + t.codec + ')',
+    'tracks with this codec are left out of Play and Shuffle queues — click one to try it anyway; the same file may play in another browser'
+  );
+  scheduleRender();
 }
 
 function skipAfterFailure(): void {
@@ -459,6 +479,7 @@ export function wireAudio(): void {
       if (S.current) {
         S.current.error = 'No audio in this file';
         logErr('playback', 'No audio in ' + S.current.title, S.current.path + ' — finished instantly but claims ' + Math.round(claimed) + 's');
+        noteCodecFailure(S.current);
         scheduleRender();
       }
       return skipAfterFailure();
@@ -467,8 +488,15 @@ export function wireAudio(): void {
   });
   audio.addEventListener('timeupdate', () => {
     syncTimeUI();
-    /* Only real elapsed playback clears the failure streak. */
-    if (performance.now() - trackLoadedAt > 1200) failStreak = 0;
+    /* Only real elapsed playback clears the failure streak — and proves the
+       codec, withdrawing any earlier session verdict against its fourcc. */
+    if (performance.now() - trackLoadedAt > 1200) {
+      failStreak = 0;
+      if (S.current && markCodecWorking(S.current.codec)) {
+        logErr('playback', codecLabel(S.current.codec as string) + ' plays after all — removing the codec badge', S.current.path);
+        scheduleRender();
+      }
+    }
     if (S.current && !seeking) {
       S.lastPos = audio.currentTime;
       if (Math.floor(audio.currentTime) % 5 === 0) savePrefs();
@@ -506,6 +534,10 @@ export function wireAudio(): void {
     if (t) {
       t.error = 'Could not play this file';
       logErr('playback', 'Could not play ' + t.title, t.path + ' — ' + why);
+      /* MEDIA_ERR_DECODE (3) and MEDIA_ERR_SRC_NOT_SUPPORTED (4) are the
+         genuine decode failures; network/abort errors say nothing about
+         the codec. */
+      if (code === 3 || code === 4) noteCodecFailure(t);
       scheduleRender();
     }
     skipAfterFailure();

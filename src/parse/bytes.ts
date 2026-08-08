@@ -8,7 +8,19 @@ export function extOf(name: string): string {
   const i = String(name).lastIndexOf('.');
   return i < 0 ? '' : String(name).slice(i + 1).toLowerCase();
 }
+
+/** OS droppings that must never reach a parser: every dot-prefixed name —
+    which covers macOS AppleDouble forks ("._01 Bad.m4a", 4 KB of resource
+    data wearing an audio extension) and .DS_Store — plus the Windows pair. */
+export function isJunkFile(name: string): boolean {
+  const base = String(name).slice(String(name).lastIndexOf('/') + 1);
+  if (base.charAt(0) === '.') return true;
+  const lower = base.toLowerCase();
+  return lower === 'thumbs.db' || lower === 'desktop.ini';
+}
+
 export function isAudioFile(file: File): boolean {
+  if (isJunkFile(file.name)) return false;
   return AUDIO_EXT.indexOf(extOf(file.name)) >= 0;
 }
 

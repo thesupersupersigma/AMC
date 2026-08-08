@@ -238,6 +238,13 @@ input[type=range]:hover::-webkit-slider-runnable-track{--fg:var(--accent)}
   background:var(--elevated);color:var(--text-dim);
 }
 
+/* Codec that failed to decode in this browser session. */
+.codec-badge{
+  display:inline-block;margin-left:7px;padding:0 5px;border-radius:4px;
+  font-size:9.5px;font-weight:700;line-height:1.5;vertical-align:1px;
+  background:rgba(255,179,64,.14);color:#ffb340;
+}
+
 /* ---------------- service worker update prompt ---------------- */
 #swUpdate{
   position:fixed;left:50%;top:14px;transform:translateX(-50%);

@@ -40,8 +40,32 @@ export function mp4Walk(b: Uint8Array, start: number, end: number, absBase: numb
       if (depth < 8) mp4Walk(b, bodyStart, bodyEnd, absBase, out, depth + 1);
     } else if (type === 'mvhd') {
       mp4Mvhd(b, bodyStart, bodyEnd, out);
+    } else if (type === 'stsd') {
+      mp4Stsd(b, bodyStart, bodyEnd, out);
     }
     p += size;
+  }
+}
+
+/* Codec identity lives in the stsd sample entry (trak > mdia > minf > stbl >
+   stsd), all of whose ancestors are already in the container walk. The
+   fourcc is what a decode failure actually failed on — canPlayType answers
+   from the codec STRING, not from whether this build has a decoder, so it
+   is never consulted for anything. */
+const AUDIO_SAMPLE_ENTRIES: Record<string, number> = {
+  mp4a: 1, alac: 1, 'ec-3': 1, 'ac-3': 1, 'ac-4': 1, drms: 1, fLaC: 1, Opus: 1, samr: 1,
+};
+
+function mp4Stsd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
+  if (s + 16 > e) return;
+  const count = u32be(b, s + 4); /* after 4 bytes of version + flags */
+  if (count < 1) return;
+  /* First sample entry: size(4) then format fourcc(4). A file can carry
+     several traks (chapter text, cover video); a known audio entry wins
+     over anything recorded from an earlier non-audio trak. */
+  const fmt = fourcc(b, s + 12);
+  if (!out.codec || (AUDIO_SAMPLE_ENTRIES[fmt] === 1 && AUDIO_SAMPLE_ENTRIES[out.codec] !== 1)) {
+    out.codec = fmt;
   }
 }
 

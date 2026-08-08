@@ -29,9 +29,12 @@ export class WebkitDirBackend implements FsBackend {
     for (const f of all) {
       const path = f.webkitRelativePath || f.name;
       if (!root && path.indexOf('/') > 0) root = path.slice(0, path.indexOf('/'));
-      const amcAt = path.indexOf('/.AMC/');
-      if (amcAt >= 0) {
-        this.sidecar.set(path.slice(amcAt + 6), f);
+      /* Either sidecar name: the current one, or a legacy ".AMC" (some
+         browsers exclude dot-entries from directory picks — when they do,
+         the folder still works and writes stay in the journal). */
+      const amc = path.match(/\/(?:AMC DO NOT DELETE|\.AMC)\//);
+      if (amc && amc.index !== undefined) {
+        this.sidecar.set(path.slice(amc.index + amc[0].length), f);
         continue;
       }
       if (isAudioFile(f)) this.files.push({ path: path, file: f });

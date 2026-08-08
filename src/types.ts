@@ -37,6 +37,14 @@ export interface Track {
       views but stays fully reachable; the primary row carries the refs. */
   shadowed?: boolean;
   dupRefs?: string[];
+  /** MP4 sample-entry fourcc from the stsd box: mp4a, alac, ec-3, ac-4,
+      drms… Identifies what a decode failure actually failed on. */
+  codec?: string;
+  /** True when real tags were parsed; false when every field came from the
+      path fallback. Tag-derived values outvote fabricated ones when an
+      album's display artist/name are derived. Undefined on rows cached
+      before this field existed. */
+  tagged?: boolean;
 }
 
 /** A track carved out of a longer file by a cue sheet. */
@@ -276,6 +284,8 @@ export interface TrackRec {
   added: number;
   hasArt: boolean;
   coverKey: string;
+  codec?: string;
+  tagged?: boolean;
 }
 
 /** IDB playlist row. Legacy rows (v1 / Phase 1) have `paths`; current rows
@@ -346,6 +356,8 @@ export interface ParsedMeta {
   channels?: number;
   bits?: number;
   foundMoov?: boolean;
+  /** MP4: the stsd sample-entry fourcc (mp4a, alac, ec-3, ac-4, drms…). */
+  codec?: string;
 }
 
 export type SortCol = 'title' | 'artist' | 'album' | 'duration';

@@ -98,14 +98,17 @@ function albumKeyDirOf(path: string): string {
   return i < 0 ? '' : dir.slice(i + 1);
 }
 
-/** v1 keyed albums on tags alone, which collapsed two editions of the same
-    album — Thriller and Thriller 25 both tag as "Michael Jackson||thriller"
-    and became one 17-track album. Folding the album's own folder path into
-    the key keeps editions apart; tracks with no path keep the old key. */
+/** The directory path dominates album grouping: files in the same folder
+    are the same album, whatever their ARTIST tags say — mixed or missing
+    tags in one folder must not split it (2 tagged mp3s plus 11 untagged
+    m4as in "Bad (1987) [Dolby Atmos] {Epic}/" are ONE album). Tags stay in
+    the key only for root-level files, which have no folder of their own.
+    Editions still separate because they live in different folders —
+    Thriller and Thriller 25 keep distinct keys. */
 export function albumKeyOf(rec: Pick<Track, 'albumArtist' | 'artist' | 'album'> & { path?: string }): string {
-  const base = norm(rec.albumArtist || rec.artist) + '||' + norm(rec.album);
   const dir = rec.path ? albumKeyDirOf(rec.path) : '';
-  return dir ? base + '||' + norm(dir) : base;
+  if (dir) return 'dir||' + norm(dir);
+  return 'tag||' + norm(rec.albumArtist || rec.artist) + '||' + norm(rec.album);
 }
 
 /** The folder name, when it differs from the album tag — "Thriller 25" on an
@@ -118,16 +121,32 @@ export function editionOf(path: string, album: string): string | undefined {
   return leaf && norm(leaf) !== norm(album) ? leaf : undefined;
 }
 
-export function artistKeyOf(rec: Pick<Track, 'albumArtist' | 'artist'>): string {
-  return norm(rec.albumArtist || rec.artist);
-}
-
 /* ---------- library index ---------- */
 
 export function trackSort(a: AnyTrack, b: AnyTrack): number {
   if (a.disc !== b.disc) return a.disc - b.disc;
   if (a.track !== b.track) return a.track - b.track;
   return a.title.localeCompare(b.title);
+}
+
+/** The most common non-empty value, compared case-insensitively; ties go to
+    the first seen. Returns '' when every value is empty. */
+function majorityOf(values: string[]): string {
+  const counts = new Map<string, { n: number; display: string }>();
+  let best = '';
+  let bestN = 0;
+  for (const v of values) {
+    if (!v) continue;
+    const k = norm(v);
+    const row = counts.get(k) || { n: 0, display: v };
+    row.n++;
+    counts.set(k, row);
+    if (row.n > bestN) {
+      bestN = row.n;
+      best = row.display;
+    }
+  }
+  return best;
 }
 
 export function rebuildIndex(): void {
@@ -165,18 +184,37 @@ export function rebuildIndex(): void {
     }
     al.tracks.push(t);
     if (!al.year && t.year) al.year = t.year;
-    if (!al.edition && t.edition) al.edition = t.edition;
     if (t.added > al.added) al.added = t.added;
+  }
 
-    const rk = artistKeyOf(t);
+  /* Display fields are derived per album, tag-derived values first: the
+     album is keyed on its folder, so a folder holding 2 tagged mp3s and 11
+     untagged m4as must show the tagged artist, not the fabricated
+     path-fallback one. Rows cached before the `tagged` flag existed count
+     as untagged and win only when nothing tagged exists. */
+  for (const al of S.albums) {
+    const tagged = al.tracks.filter((t) => t.tagged === true);
+    const pool = tagged.length ? tagged : al.tracks;
+    al.artist = majorityOf(pool.map((t) => t.albumArtist || t.artist)) || al.artist;
+    al.album = majorityOf(pool.map((t) => t.album)) || al.album;
+    const y = pool.find((t) => t.year > 0);
+    if (y) al.year = y.year;
+    al.edition = editionOf(al.tracks[0].path, al.album);
+  }
+
+  /* Artists group the derived album artists — a fabricated path-fallback
+     artist on individual tracks never becomes an artist row of its own. */
+  for (const al of S.albums) {
+    const rk = norm(al.artist);
     let ar = S.artistMap[rk];
     if (!ar) {
-      ar = S.artistMap[rk] = { key: rk, name: t.albumArtist || t.artist, albums: [], tracks: [] };
+      ar = S.artistMap[rk] = { key: rk, name: al.artist, albums: [], tracks: [] };
       S.artists.push(ar);
     }
-    ar.tracks.push(t);
-    if (ar.albums.indexOf(al) < 0) ar.albums.push(al);
+    ar.albums.push(al);
+    for (const t of al.tracks) ar.tracks.push(t);
   }
+
   for (let i = 0; i < S.albums.length; i++) S.albums[i].tracks.sort(trackSort);
   S.albums.sort((a, b) => {
     const c = a.artist.localeCompare(b.artist);
@@ -200,6 +238,51 @@ export function isPlayableTrack(t: RowTrack | null | undefined): t is AnyTrack &
     hidden — but they are never rows of their own. */
 export function libraryTracks(): AnyTrack[] {
   return S.tracks.filter((t) => !t.shadowed);
+}
+
+/* ---------- codec support, learned by attempt --------------------------
+   canPlayType answers from the codec string, not from whether this build
+   has a decoder (the same ec-3 file reports "probably" in a chromium build
+   that cannot play it), so nothing is ever gated on it. A fourcc becomes
+   known-failing only after a genuine decode failure, for this session
+   only; a later successful attempt clears it. ---------- */
+
+const CODEC_LABELS: Record<string, string> = {
+  mp4a: 'AAC',
+  alac: 'Apple Lossless',
+  'ec-3': 'Dolby Digital Plus (Atmos)',
+  'ac-3': 'Dolby Digital',
+  'ac-4': 'Dolby AC-4',
+  drms: 'protected AAC (DRM)',
+};
+
+export function codecLabel(codec: string): string {
+  return CODEC_LABELS[codec] || codec.toUpperCase();
+}
+
+const failedCodecs = new Set<string>();
+const workingCodecs = new Set<string>();
+
+export function isCodecFailed(codec?: string): boolean {
+  return !!codec && failedCodecs.has(codec);
+}
+
+/** A decode succeeded: the fourcc is proven for this browser, and any
+    earlier failure verdict is withdrawn. Returns true if one was. */
+export function markCodecWorking(codec?: string): boolean {
+  if (!codec) return false;
+  workingCodecs.add(codec);
+  return failedCodecs.delete(codec);
+}
+
+/** A genuine decode failure. The fourcc is marked unsupported for this
+    session — unless another file with the same fourcc already played, in
+    which case this is one broken file, not a missing decoder. Returns true
+    when the fourcc is newly marked. */
+export function markCodecFailed(codec?: string): boolean {
+  if (!codec || workingCodecs.has(codec) || failedCodecs.has(codec)) return false;
+  failedCodecs.add(codec);
+  return true;
 }
 export function isMissingTrack(t: RowTrack): t is MissingTrack {
   return t.kind === 'missing';

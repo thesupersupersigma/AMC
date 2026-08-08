@@ -213,7 +213,7 @@ function playFromSub(primary: AnyTrack): MenuItem[] {
       const list = S.visible.map((u) => S.byUid[u]).filter(Boolean);
       const at = list.findIndex((t) => t.uid === primary.uid);
       if (at >= 0) list[at] = c.track;
-      playList(list, at >= 0 ? at : 0);
+      playList(list, at >= 0 ? at : 0, { attemptTarget: true });
     },
   }));
 }

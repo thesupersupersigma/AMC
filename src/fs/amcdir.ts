@@ -200,7 +200,7 @@ export function queueSidecarWrite(
   if (folder.capability !== 'readwrite') {
     if (!warnedReadOnly.has(folder.folderId)) {
       warnedReadOnly.add(folder.folderId);
-      logErr('sidecar', "'" + folder.label + "' is read-only in this browser", 'changes are kept in the browser cache and will write to .AMC when the folder is added with write access');
+      logErr('sidecar', "'" + folder.label + "' is read-only in this browser", 'changes are kept in the browser cache and will write to the sidecar when the folder is added with write access');
     }
     return;
   }

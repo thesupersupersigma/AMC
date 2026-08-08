@@ -87,6 +87,8 @@ export async function parseTrack(file: File, key: string, path: string): Promise
     added: file.lastModified || 0,
     hasArt: !!(meta.pic || (meta.pics && meta.pics.length)),
     coverKey: '',
+    codec: meta.codec,
+    tagged: !!(t['TITLE'] || t['ARTIST'] || t['ALBUMARTIST'] || t['ALBUM']),
   };
   rec.coverKey = albumKeyOf(rec);
   return { rec: rec, meta: meta };
@@ -138,6 +140,8 @@ export function recToTrack(rec: TrackRec, folderId: string, file?: File): FileTr
        rows cached by earlier versions carry older key shapes. */
     coverKey: albumKeyOf(rec),
     edition: editionOf(rec.path, rec.album),
+    codec: rec.codec,
+    tagged: rec.tagged,
     error: '',
   };
 }
