@@ -54,6 +54,11 @@ function yearOf(s: string | undefined): string {
   return m ? m[0] : '';
 }
 
+/** Bumped whenever a parser fix changes what lands in the cache. Rows
+    stamped with an older (or missing) version re-parse once and heal.
+    2 = mdhd-preferred MP4 durations + grown moov reads + codec/tagged. */
+const PARSE_VERSION = 2;
+
 /* ---------- one track ---------- */
 export async function parseTrack(file: File, key: string, path: string): Promise<{ rec: TrackRec; meta: ParsedMeta }> {
   const ext = extOf(file.name);
@@ -89,6 +94,7 @@ export async function parseTrack(file: File, key: string, path: string): Promise
     coverKey: '',
     codec: meta.codec,
     tagged: !!(t['TITLE'] || t['ARTIST'] || t['ALBUMARTIST'] || t['ALBUM']),
+    pv: PARSE_VERSION,
   };
   rec.coverKey = albumKeyOf(rec);
   return { rec: rec, meta: meta };
@@ -214,7 +220,7 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
     try {
       const cached = await idbGet<TrackRec>(ST_TRACKS, key);
       let r: { rec: TrackRec; meta: ParsedMeta | null };
-      if (cached && cached.title) {
+      if (cached && cached.title && cached.pv === PARSE_VERSION) {
         cached.path = path; /* path can change between picks */
         r = { rec: cached, meta: null };
       } else {

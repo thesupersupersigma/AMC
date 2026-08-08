@@ -286,6 +286,10 @@ export interface TrackRec {
   coverKey: string;
   codec?: string;
   tagged?: boolean;
+  /** Parser version that produced this row. A mismatch re-parses the file —
+      cache rows written before a parser fix (missing codec/tagged, wrong
+      durations) self-heal instead of needing a manual rescan. */
+  pv?: number;
 }
 
 /** IDB playlist row. Legacy rows (v1 / Phase 1) have `paths`; current rows
@@ -358,6 +362,14 @@ export interface ParsedMeta {
   foundMoov?: boolean;
   /** MP4: the stsd sample-entry fourcc (mp4a, alac, ec-3, ac-4, drms…). */
   codec?: string;
+  /** MP4 internal: longest mdhd media duration in seconds. Preferred over
+      the mvhd movie duration — real muxers write garbage mvhd durations
+      (a real Atmos rip carried mvhd ≈ real² × 0.036 × timescale) while the
+      audio trak's mdhd stays correct. */
+  durationMdhd?: number;
+  /** MP4 internal: a top-level moov started inside the head read but did
+      not fit (huge embedded artwork); parseMp4 re-reads to this byte. */
+  needBytes?: number;
 }
 
 export type SortCol = 'title' | 'artist' | 'album' | 'duration';

@@ -26,7 +26,11 @@ export function mp4Walk(b: Uint8Array, start: number, end: number, absBase: numb
     const bodyEnd = p + size;
     if (bodyEnd > end) {
       /* Truncated in this buffer — usually a huge mdat. Stop; the caller
-         falls back to a tail read when moov was never found. */
+         falls back to a tail read when moov was never found. A truncated
+         top-level moov is different: it means the metadata itself did not
+         fit the head read (multi-MB embedded artwork), so tell the caller
+         how far to grow. */
+      if (type === 'moov' && depth === 0) out.needBytes = bodyEnd;
       return;
     }
     if (type === 'moov') out.foundMoov = true;
@@ -40,6 +44,8 @@ export function mp4Walk(b: Uint8Array, start: number, end: number, absBase: numb
       if (depth < 8) mp4Walk(b, bodyStart, bodyEnd, absBase, out, depth + 1);
     } else if (type === 'mvhd') {
       mp4Mvhd(b, bodyStart, bodyEnd, out);
+    } else if (type === 'mdhd') {
+      mp4Mdhd(b, bodyStart, bodyEnd, out);
     } else if (type === 'stsd') {
       mp4Stsd(b, bodyStart, bodyEnd, out);
     }
@@ -83,6 +89,29 @@ function mp4Mvhd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
     dur = u32be(b, s + 16);
   }
   if (ts > 0 && dur > 0) out.duration = dur / ts;
+}
+
+/* mdhd shares mvhd's field layout exactly — version 0 stores times and
+   duration as 32-bit, version 1 as 64-bit with the timescale after the two
+   8-byte times. The longest trak's media duration wins (auxiliary chapter
+   traks are never longer than the audio). */
+function mp4Mdhd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
+  if (s + 4 > e) return;
+  const version = b[s];
+  let ts: number, dur: number;
+  if (version === 1) {
+    if (s + 32 > e) return;
+    ts = u32be(b, s + 20);
+    dur = u64be(b, s + 24);
+  } else {
+    if (s + 20 > e) return;
+    ts = u32be(b, s + 12);
+    dur = u32be(b, s + 16);
+  }
+  if (ts > 0 && dur > 0) {
+    const sec = dur / ts;
+    if (!out.durationMdhd || sec > out.durationMdhd) out.durationMdhd = sec;
+  }
 }
 
 const MP4_TAGMAP: Record<string, string> = {};
@@ -155,27 +184,45 @@ export function findMoov(b: Uint8Array): number {
   return -1;
 }
 
+/* The mvhd movie duration is only a fallback: real muxers write garbage
+   there (one Atmos rip carries mvhd ≈ real² × 0.036 × timescale) while the
+   trak-level mdhd stays correct. */
+function finishDuration(out: ParsedMeta): ParsedMeta {
+  if (out.durationMdhd) out.duration = out.durationMdhd;
+  return out;
+}
+
 export async function parseMp4(file: File): Promise<ParsedMeta> {
   const out: ParsedMeta = { tags: {}, duration: 0, pic: null, fmt: extOf(file.name), foundMoov: false };
-  const b = await readBytes(file, 0, Math.min(file.size, HEAD));
+  let b = await readBytes(file, 0, Math.min(file.size, HEAD));
   try {
     mp4Walk(b, 0, b.length, 0, out, 0);
   } catch (e) {
     logErr('mp4', 'Atom walk failed for ' + file.name, (e as Error).message);
   }
-  if (out.foundMoov || file.size <= HEAD) return out;
+  if (!out.foundMoov && out.needBytes && out.needBytes > b.length && out.needBytes <= file.size) {
+    /* The moov starts in the head but did not fit (multi-MB embedded
+       artwork). Grow the read to cover it and walk again. */
+    b = await readBytes(file, 0, out.needBytes);
+    try {
+      mp4Walk(b, 0, b.length, 0, out, 0);
+    } catch (e) {
+      logErr('mp4', 'Atom walk failed for ' + file.name, (e as Error).message);
+    }
+  }
+  if (out.foundMoov || file.size <= HEAD) return finishDuration(out);
   /* moov lives at the end of the file — read the last 1 MB and retry. */
   const startAt = Math.max(0, file.size - HEAD);
   const tb = await readBytes(file, startAt, file.size);
   const at = findMoov(tb);
   if (at < 0) {
     logErr('mp4', 'No moov atom found in ' + file.name, 'checked head and tail');
-    return out;
+    return finishDuration(out);
   }
   try {
     mp4Walk(tb, at, tb.length, startAt, out, 0);
   } catch (e) {
     logErr('mp4', 'Tail atom walk failed for ' + file.name, (e as Error).message);
   }
-  return out;
+  return finishDuration(out);
 }
