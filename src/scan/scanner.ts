@@ -3,20 +3,22 @@
    one at a time through a queue; each scan replaces only that folder's
    tracks, then the whole library re-indexes and re-merges duplicates. */
 
-import type { AnyTrack, ConnectedFolder, FileTrack, ParsedMeta, TrackRec } from '../types';
+import type { AnyTrack, ConnectedFolder, CueSheet, CueTrack, FileTrack, ParsedMeta, TrackRec, VirtualTrack } from '../types';
 import { extOf } from '../parse/bytes';
 import { parseFlac, flacPicture } from '../parse/flac';
 import { parseMp4 } from '../parse/mp4';
 import { parseId3 } from '../parse/id3';
+import { parseCueText, sheetFromFlacCue } from '../parse/cue';
 import { S, albumKeyOf, editionOf, haveCover, refOf, releaseCovers, setCoverLocal, storeCover, rebuildIndex } from '../state';
 import { ST_COVERS, ST_TRACKS, idbClear, idbGet, idbPut } from '../db/idb';
 import { logErr } from '../ui/log';
-import { $, tick, toast } from '../util';
+import { $, norm, tick, toast } from '../util';
 import { render, scheduleRender } from '../ui/render';
 import { restoreLastTrack } from '../ui/player';
 import { adoptLegacyPlaylists, reflushFolderPlaylists } from '../ui/playlists';
 import { applyDedupe } from './dedupe';
-import { buildLibraryJson, queueSidecarWrite } from '../fs/amcdir';
+import { detectSplitFlags } from './detect';
+import { buildLibraryJson, queueSidecarWrite, stripRoot } from '../fs/amcdir';
 import { connectedFolders, folderOrder } from '../fs/folders';
 import { probe } from '../audio/engine';
 import type { CoverRec } from '../types';
@@ -56,8 +58,9 @@ function yearOf(s: string | undefined): string {
 
 /** Bumped whenever a parser fix changes what lands in the cache. Rows
     stamped with an older (or missing) version re-parse once and heal.
-    2 = mdhd-preferred MP4 durations + grown moov reads + codec/tagged. */
-const PARSE_VERSION = 2;
+    2 = mdhd-preferred MP4 durations + grown moov reads + codec/tagged.
+    3 = FLAC CUESHEET block boundaries + embedded CUESHEET tag captured. */
+const PARSE_VERSION = 3;
 
 /* ---------- one track ---------- */
 export async function parseTrack(file: File, key: string, path: string): Promise<{ rec: TrackRec; meta: ParsedMeta }> {
@@ -94,6 +97,8 @@ export async function parseTrack(file: File, key: string, path: string): Promise
     coverKey: '',
     codec: meta.codec,
     tagged: !!(t['TITLE'] || t['ARTIST'] || t['ALBUMARTIST'] || t['ALBUM']),
+    flacCue: meta.flacCue,
+    cueText: t['CUESHEET'],
     pv: PARSE_VERSION,
   };
   rec.coverKey = albumKeyOf(rec);
@@ -166,12 +171,210 @@ export function resetLibrary(): void {
   releaseCovers();
 }
 
-/** One finished index pass: merge duplicates across folders, rebuild. */
+/** One finished index pass: merge duplicates across folders, rebuild,
+    re-flag unsplit-rip candidates. */
 function reindexLibrary(): void {
   /* Keep S.tracks in folder order so first-wins lookups follow priority. */
   S.tracks.sort((a, b) => folderOrder(a.folderId) - folderOrder(b.folderId) || a.path.localeCompare(b.path));
   applyDedupe(S.tracks, folderOrder);
   rebuildIndex();
+  detectSplitFlags();
+}
+
+/* ---------- cue attachment -------------------------------------------
+   Sources, in priority order: the FLAC CUESHEET metadata block; a sibling
+   .cue whose FILE line names the audio file; a sidecar cues/<path>.cue;
+   the CUESHEET Vorbis comment. A cue produces VirtualTracks that appear as
+   ordinary tracks, and the source file is hidden once a cue claims it — or
+   the 42-minute blob shows up alongside its own contents. ---------- */
+
+function baseNameOf(p: string): string {
+  return p.slice(p.lastIndexOf('/') + 1);
+}
+function dirNameOf(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? '' : p.slice(0, i);
+}
+
+function makeVirtual(src: FileTrack, ct: CueTrack, sheet: CueSheet): VirtualTrack {
+  const end = ct.endSec > 0 ? Math.min(ct.endSec, src.duration || ct.endSec) : src.duration || 0;
+  const nn = String(ct.index).padStart(2, '0');
+  return {
+    kind: 'virtual',
+    uid: 't' + ++uidSeq,
+    folderId: src.folderId,
+    path: src.path + '#cue' + nn,
+    cacheKey: src.cacheKey + '#' + ct.index,
+    sourcePath: src.path,
+    startSec: ct.startSec,
+    endSec: end,
+    cueIndex: ct.index,
+    file: src.file,
+    title: ct.title || 'Track ' + nn,
+    artist: ct.performer || sheet.performer || src.artist,
+    /* An untagged source's album/artist are path fabrications; the cue's
+       sheet-level TITLE and PERFORMER are the better fallback there. */
+    albumArtist: src.tagged ? src.albumArtist : sheet.performer || ct.performer || src.albumArtist,
+    album: src.tagged ? src.album : sheet.title || src.album,
+    track: ct.index,
+    disc: src.disc,
+    year: src.year,
+    genre: src.genre,
+    duration: end > ct.startSec ? end - ct.startSec : 0,
+    fmt: src.fmt,
+    size: src.size,
+    added: src.added,
+    coverKey: src.coverKey,
+    hasArt: src.hasArt,
+    codec: src.codec,
+    tagged: src.tagged || !!ct.title,
+    edition: src.edition,
+    error: '',
+  };
+}
+
+/** Resolves each file track's cue (per the source priority), carves
+    VirtualTracks, hides claimed sources, and records broken-cue reasons.
+    Returns the virtuals to append to the library. */
+async function attachCues(
+  folder: ConnectedFolder,
+  fileTracks: FileTrack[],
+  cueFiles: Array<{ path: string; file: File }>,
+  recByPath: Map<string, TrackRec>
+): Promise<VirtualTrack[]> {
+  /* Sidecar cue existence, one directory listing per album folder instead
+     of one failed read per track. */
+  const sidecarCues = new Set<string>();
+  const dirs = new Set<string>();
+  for (const t of fileTracks) dirs.add(dirNameOf(stripRoot(t.path)));
+  for (const d of dirs) {
+    try {
+      const names = await folder.backend.listSidecarDir(d ? 'cues/' + d : 'cues');
+      for (const n of names) if (/\.cue$/i.test(n)) sidecarCues.add((d ? d + '/' : '') + n);
+    } catch {
+      /* unreadable listing — sidecar cues in this dir just don't resolve */
+    }
+  }
+
+  /* Sibling cues, parsed once each and grouped by directory. */
+  const cuesByDir = new Map<string, Array<{ path: string; sheet: CueSheet | null; text: string }>>();
+  for (const cf of cueFiles) {
+    let text = '';
+    try {
+      text = await cf.file.text();
+    } catch (e) {
+      logErr('cue', 'Could not read ' + cf.path, (e as Error).message);
+    }
+    const sheet = text ? parseCueText(text, 'sibling') : null;
+    const dir = dirNameOf(cf.path);
+    const g = cuesByDir.get(dir) || [];
+    g.push({ path: cf.path, sheet: sheet, text: text });
+    cuesByDir.set(dir, g);
+  }
+
+  const virtuals: VirtualTrack[] = [];
+  const claimedCues = new Set<string>();
+
+  for (const t of fileTracks) {
+    t.claimedByCue = false;
+    t.cueError = undefined;
+    const rec = recByPath.get(t.path);
+
+    /* Gather EVERY available source, in priority order. Sources merge
+       rather than rank: the FLAC block carries boundaries but never
+       titles, and it must not shadow a sibling cue that has both. */
+    const candidates: Array<{ sheet: CueSheet; source: CueSheet['source'] }> = [];
+    let parseFailNote = '';
+
+    if (rec && rec.flacCue) {
+      const s = sheetFromFlacCue(rec.flacCue.starts, rec.flacCue.leadout, 'flac-block');
+      if (s) candidates.push({ sheet: s, source: 'flac-block' });
+    }
+    const siblings = cuesByDir.get(dirNameOf(t.path)) || [];
+    for (const c of siblings) {
+      if (!c.sheet) continue;
+      if (norm(c.sheet.file) === norm(baseNameOf(t.path))) {
+        candidates.push({ sheet: c.sheet, source: 'sibling' });
+        claimedCues.add(c.path);
+        break;
+      }
+    }
+    const rel = stripRoot(t.path) + '.cue';
+    if (sidecarCues.has(rel)) {
+      const text = await folder.backend.readSidecarText('cues/' + rel);
+      if (text != null) {
+        const s = parseCueText(text, 'sidecar');
+        if (s) candidates.push({ sheet: s, source: 'sidecar' });
+        else parseFailNote = 'The saved cue sheet failed to parse';
+      }
+    }
+    if (rec && rec.cueText) {
+      const s = parseCueText(rec.cueText, 'vorbis-tag');
+      if (s) candidates.push({ sheet: s, source: 'vorbis-tag' });
+      else if (!parseFailNote) parseFailNote = 'The embedded CUESHEET tag failed to parse';
+    }
+
+    if (!candidates.length) {
+      if (parseFailNote) t.cueError = parseFailNote;
+      continue;
+    }
+
+    /* Boundaries from the highest-priority source that has them (the first
+       candidate — every parsed sheet has boundaries by construction);
+       titles and performers from the highest-priority source that has
+       THOSE, matched by position. */
+    const boundaries = candidates[0];
+    const titles = candidates.find((c) => c.sheet.tracks.some((x) => !!x.title)) || null;
+    const performers = candidates.find((c) => !!c.sheet.performer || c.sheet.tracks.some((x) => !!x.performer)) || null;
+    const merged: CueSheet = {
+      file: boundaries.sheet.file,
+      title: (titles && titles.sheet.title) || boundaries.sheet.title,
+      performer: (performers && performers.sheet.performer) || boundaries.sheet.performer,
+      source: boundaries.source,
+      tracks: boundaries.sheet.tracks.map((bt, i) => ({
+        index: bt.index,
+        startSec: bt.startSec,
+        endSec: bt.endSec,
+        pregapSec: bt.pregapSec,
+        title: bt.title || (titles && titles.sheet.tracks[i] ? titles.sheet.tracks[i].title : ''),
+        performer: bt.performer || (performers && performers.sheet.tracks[i] ? performers.sheet.tracks[i].performer : ''),
+      })),
+    };
+
+    /* Ends resolve against the file duration; nonsense boundaries drop. */
+    const dur = t.duration || 0;
+    const usable = merged.tracks.filter((c) => c.startSec >= 0 && (dur === 0 || c.startSec < dur));
+    if (usable.length) {
+      const last = usable[usable.length - 1];
+      if (!last.endSec || (dur > 0 && last.endSec > dur)) last.endSec = dur;
+      for (const c of usable) virtuals.push(makeVirtual(t, c, merged));
+      t.claimedByCue = true;
+      logErr(
+        'cue',
+        "Cue attached to '" + baseNameOf(t.path) + "' — " + usable.length + ' tracks',
+        'boundaries from ' + boundaries.source + ' · titles from ' + (titles ? titles.source : 'none (numbered tracks)') + ' · performers from ' + (performers ? performers.source : 'none')
+      );
+    } else {
+      t.cueError = 'The cue sheet has no usable tracks';
+    }
+  }
+
+  /* Cues that parsed but claimed nothing, or failed to parse: badge the
+     audio file they most plausibly belong to. */
+  cuesByDir.forEach((group, dir) => {
+    for (const c of group) {
+      if (claimedCues.has(c.path)) continue;
+      const inDir = fileTracks.filter((t) => dirNameOf(t.path) === dir && !t.claimedByCue);
+      if (!inDir.length) continue;
+      const sameBase = inDir.find((t) => norm(baseNameOf(t.path).replace(/\.[^.]+$/, '')) === norm(baseNameOf(c.path).replace(/\.cue$/i, '')));
+      const target = sameBase || (inDir.length === 1 ? inDir[0] : null);
+      if (target && !target.cueError) {
+        target.cueError = c.sheet ? "The cue sheet '" + baseNameOf(c.path) + "' points at a missing file" : "The cue sheet '" + baseNameOf(c.path) + "' failed to parse";
+      }
+    }
+  });
+
+  return virtuals;
 }
 
 /* Folders scan strictly one at a time; the chain is the queue. */
@@ -191,7 +394,9 @@ export function enqueueFolderScan(folder: ConnectedFolder): void {
 }
 
 async function scanFolder(folder: ConnectedFolder): Promise<void> {
-  const files = await folder.backend.listAudioFiles();
+  const listed = await folder.backend.listScanFiles();
+  const files = listed.filter((f) => extOf(f.path) !== 'cue');
+  const cueFiles = listed.filter((f) => extOf(f.path) === 'cue');
   /* Replace only this folder's rows; other folders keep playing. */
   S.tracks = S.tracks.filter((t) => t.folderId !== folder.folderId);
 
@@ -210,6 +415,8 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
   render();
 
   const pendingCovers: Record<string, boolean> = {};
+  const scanned: FileTrack[] = [];
+  const recByPath = new Map<string, TrackRec>();
 
   for (let idx = 0; idx < files.length; idx++) {
     const file = files[idx].file;
@@ -230,6 +437,8 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
       }
       const t = recToTrack(r.rec, folder.folderId, file);
       S.tracks.push(t);
+      scanned.push(t);
+      recByPath.set(t.path, r.rec);
       S.byRef[refOf(t.folderId, t.path)] = t;
       if (!S.byPath[t.path]) S.byPath[t.path] = t;
       S.byUid[t.uid] = t;
@@ -311,6 +520,19 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
     }
   }
 
+  /* Cue sheets carve their virtual tracks now that every file's duration
+     and tags are in hand; claimed sources hide from the library views. */
+  try {
+    const virtuals = await attachCues(folder, scanned, cueFiles, recByPath);
+    for (const v of virtuals) {
+      S.tracks.push(v);
+      S.byRef[refOf(v.folderId, v.path)] = v;
+      S.byUid[v.uid] = v;
+    }
+  } catch (e) {
+    logErr('cue', "Cue attachment failed for '" + folder.label + "'", (e as Error) && (e as Error).message);
+  }
+
   S.scanning = false;
   reindexLibrary();
   updateScanChip();
@@ -343,12 +565,14 @@ export function updateScanChip(): void {
   }
 }
 
-/* Durations we could not get from headers (MP3, and anything odd) are read
-   from a hidden audio element after the scan, one at a time, then cached. */
+/* Durations we could not get from headers (MP3, WAV, and anything odd) are
+   read from a hidden audio element after the scan, one at a time, then
+   cached. Virtual tracks are never probed — the element would report the
+   whole source file's length, not the cue window. */
 let probing = false;
 export function backfillDurations(): void {
   if (probing) return;
-  const pending = S.tracks.filter((t) => !t.duration && t.file);
+  const pending = S.tracks.filter((t) => t.kind === 'file' && !t.duration && t.file);
   if (!pending.length) return;
   probing = true;
   let i = 0;
@@ -364,6 +588,17 @@ export function backfillDurations(): void {
       }
       url = '';
     }
+    /* Freshly-probed source durations resolve what depended on them: the
+       open end of a cue's last virtual track, and the long-file flags. */
+    for (const t of S.tracks) {
+      if (t.kind !== 'virtual' || t.endSec > 0) continue;
+      const src = S.byRef[refOf(t.folderId, t.sourcePath)];
+      if (src && src.duration > 0) {
+        t.endSec = src.duration;
+        t.duration = Math.max(0, t.endSec - t.startSec);
+      }
+    }
+    detectSplitFlags();
     scheduleRender();
   }
   function step(): void {

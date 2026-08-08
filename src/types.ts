@@ -45,6 +45,15 @@ export interface Track {
       album's display artist/name are derived. Undefined on rows cached
       before this field existed. */
   tagged?: boolean;
+  /** Set on a source file once a cue sheet carved it into VirtualTracks —
+      the 42-minute blob must not show up alongside its own contents. Stays
+      reachable through byRef/byUid. */
+  claimedByCue?: boolean;
+  /** Unsplit-rip detection (Phase 3): why this row is badged. */
+  splitFlag?: 'long-no-cue' | 'lonely-long' | 'cue-broken';
+  /** What went wrong with this file's cue source, when splitFlag is
+      'cue-broken'. */
+  cueError?: string;
 }
 
 /** A track carved out of a longer file by a cue sheet. */
@@ -190,8 +199,9 @@ export interface FsBackend {
   kind: 'fsa' | 'webkitdir';
   capability: Capability;
   label: string;
-  /** Every audio file under the root, sorted by path. */
-  listAudioFiles(): Promise<{ path: string; file: File }[]>;
+  /** Every scannable file under the root, sorted by path: audio files plus
+      .cue sheets (which ride along so sibling cues can attach). */
+  listScanFiles(): Promise<{ path: string; file: File }[]>;
   /** Text of a file inside .AMC/, or null when absent or unreadable. */
   readSidecarText(relPath: string): Promise<string | null>;
   /** Names of files inside a .AMC/ subdirectory ('' for .AMC itself). */
@@ -286,6 +296,11 @@ export interface TrackRec {
   coverKey: string;
   codec?: string;
   tagged?: boolean;
+  /** FLAC CUESHEET metadata block (type 5), already converted to seconds.
+      No titles — the block carries only boundaries. */
+  flacCue?: { starts: number[]; leadout?: number };
+  /** The CUESHEET Vorbis comment, verbatim cue text, when present. */
+  cueText?: string;
   /** Parser version that produced this row. A mismatch re-parses the file —
       cache rows written before a parser fix (missing codec/tagged, wrong
       durations) self-heal instead of needing a manual rescan. */
@@ -367,9 +382,19 @@ export interface ParsedMeta {
       (a real Atmos rip carried mvhd ≈ real² × 0.036 × timescale) while the
       audio trak's mdhd stays correct. */
   durationMdhd?: number;
+  /** MP4 internal: the soun (audio) trak's mdhd duration — authoritative
+      over every other trak. */
+  durationAudio?: number;
+  /** MP4 internal, transient: handler type of the mdia currently being
+      walked, so mdhd knows whether it belongs to the audio trak. */
+  mdiaHandler?: string;
   /** MP4 internal: a top-level moov started inside the head read but did
       not fit (huge embedded artwork); parseMp4 re-reads to this byte. */
   needBytes?: number;
+  /** FLAC: CUESHEET metadata block boundaries, in seconds. */
+  flacCue?: { starts: number[]; leadout?: number };
+  /** FLAC: the CUESHEET Vorbis comment, verbatim. */
+  cueText?: string;
 }
 
 export type SortCol = 'title' | 'artist' | 'album' | 'duration';

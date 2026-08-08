@@ -165,9 +165,9 @@ export function rebuildIndex(): void {
        primary. */
     if (!S.byPath[t.path] || (S.byPath[t.path].shadowed && !t.shadowed)) S.byPath[t.path] = t;
     S.byUid[t.uid] = t;
-    /* Shadowed duplicate copies stay reachable through byRef/byUid but are
-       not library rows of their own. */
-    if (t.shadowed) continue;
+    /* Shadowed duplicate copies and cue-claimed source files stay reachable
+       through byRef/byUid but are not library rows of their own. */
+    if (t.shadowed || t.claimedByCue) continue;
     const ak = t.coverKey;
     let al = S.albumMap[ak];
     if (!al) {
@@ -233,11 +233,11 @@ export function isPlayableTrack(t: RowTrack | null | undefined): t is AnyTrack &
   return !!t && t.kind !== 'missing' && !!(t as AnyTrack).file;
 }
 
-/** The library rows: every track except shadowed duplicate copies. The
-    copies stay reachable via byRef and the "Play from" menu — merged, not
-    hidden — but they are never rows of their own. */
+/** The library rows: every track except shadowed duplicate copies and
+    cue-claimed source files. Both stay reachable via byRef — merged or
+    carved, not lost — but they are never rows of their own. */
 export function libraryTracks(): AnyTrack[] {
-  return S.tracks.filter((t) => !t.shadowed);
+  return S.tracks.filter((t) => !t.shadowed && !t.claimedByCue);
 }
 
 /* ---------- codec support, learned by attempt --------------------------
@@ -277,10 +277,16 @@ export function markCodecWorking(codec?: string): boolean {
 
 /** A genuine decode failure. The fourcc is marked unsupported for this
     session — unless another file with the same fourcc already played, in
-    which case this is one broken file, not a missing decoder. Returns true
-    when the fourcc is newly marked. */
-export function markCodecFailed(codec?: string): boolean {
-  if (!codec || workingCodecs.has(codec) || failedCodecs.has(codec)) return false;
+    which case this is one broken file, not a missing decoder. `force` is
+    for MEDIA_ERR_SRC_NOT_SUPPORTED, a codec-level verdict that overrides a
+    "working" mark earned by a silently-advancing broken stream. Returns
+    true when the fourcc is newly marked. */
+export function markCodecFailed(codec?: string, force?: boolean): boolean {
+  if (!codec || failedCodecs.has(codec)) return false;
+  if (workingCodecs.has(codec)) {
+    if (!force) return false;
+    workingCodecs.delete(codec);
+  }
   failedCodecs.add(codec);
   return true;
 }

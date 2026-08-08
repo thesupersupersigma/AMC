@@ -6,7 +6,7 @@
    PICTURE      : back to BIG-endian for every field. */
 
 import type { FlacPicRef, ParsedMeta, ParsedTags } from '../types';
-import { HEAD, decLatin, decUtf8, readBytes, u24be, u32be, u32le, cleanStr } from './bytes';
+import { HEAD, decLatin, decUtf8, readBytes, u24be, u32be, u64be, u32le, cleanStr } from './bytes';
 import { Bits } from './bits';
 import { logErr } from '../ui/log';
 
@@ -89,6 +89,23 @@ export async function parseFlac(file: File): Promise<ParsedMeta> {
           logErr('flac', 'Tag block in ' + file.name + ' is malformed', (e as Error).message);
         }
       }
+    } else if (type === 5) {
+      /* CUESHEET block — boundaries only, no titles. Sample offsets convert
+         through the STREAMINFO rate, which always precedes (block 0). */
+      if (body + len > buf.length) {
+        const cb = await readBytes(file, body, body + len);
+        try {
+          readFlacCuesheet(cb, 0, Math.min(len, cb.length), out);
+        } catch (e) {
+          logErr('flac', 'Cuesheet block in ' + file.name + ' is malformed', (e as Error).message);
+        }
+      } else {
+        try {
+          readFlacCuesheet(buf, body, len, out);
+        } catch (e) {
+          logErr('flac', 'Cuesheet block in ' + file.name + ' is malformed', (e as Error).message);
+        }
+      }
     } else if (type === 6) {
       /* Record where it is; read the bytes only if this album still needs art.
          Peek the picture type (BIG-endian) so type 3 (front cover) can win. */
@@ -100,6 +117,34 @@ export async function parseFlac(file: File): Promise<ParsedMeta> {
     if (last) break;
   }
   return out;
+}
+
+/* FLAC CUESHEET block (type 5): 128 bytes media catalog number, u64 lead-in
+   samples, 1 flag byte + 258 reserved, then num_tracks(u8) and per track:
+   offset u64 (samples), number u8, ISRC 12, flags 1, reserved 13,
+   num_indices u8, then per index: offset u64, number u8, reserved 3.
+   Track number 170 is the lead-out — its offset is the end boundary. */
+function readFlacCuesheet(b: Uint8Array, body: number, len: number, out: ParsedMeta): void {
+  const rate = out.sampleRate || 0;
+  if (rate <= 0) return;
+  const end = body + len;
+  let p = body + 128 + 8 + 1 + 258;
+  if (p + 1 > end) return;
+  const numTracks = b[p];
+  p += 1;
+  const starts: number[] = [];
+  let leadout: number | undefined;
+  for (let i = 0; i < numTracks && p + 36 <= end; i++) {
+    const offsetSamples = u64be(b, p);
+    const trackNo = b[p + 8];
+    const numIndices = b[p + 35];
+    p += 36;
+    p += numIndices * 12;
+    if (p > end) break;
+    if (trackNo === 170) leadout = offsetSamples / rate;
+    else if (trackNo >= 1) starts.push(offsetSamples / rate);
+  }
+  if (starts.length) out.flacCue = { starts: starts, leadout: leadout };
 }
 
 export function readStreamInfo(b: Uint8Array, body: number, out: ParsedMeta): void {

@@ -243,7 +243,7 @@ export async function addFsaFolder(handle: FileSystemDirectoryHandle): Promise<v
 
 export async function addWebkitFolder(fileList: FileList): Promise<void> {
   const backend = new WebkitDirBackend(fileList);
-  const files = await backend.listAudioFiles();
+  const files = await backend.listScanFiles();
   if (!files.length) {
     /* Keep the v1 behaviour: show the shell and say what happened. */
     toast('No playable audio in that folder. Try the folder that holds the album folders.');

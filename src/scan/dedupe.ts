@@ -26,6 +26,9 @@ export function applyDedupe(tracks: AnyTrack[], orderOf: (folderId: string) => n
   }
   const groups = new Map<string, AnyTrack[]>();
   for (const t of tracks) {
+    /* A cue-claimed source is already hidden; its virtual tracks join the
+       pool instead and merge across folders like any other row. */
+    if (t.claimedByCue) continue;
     const k = dupKey(t);
     const g = groups.get(k);
     if (g) g.push(t);

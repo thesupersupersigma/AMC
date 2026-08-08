@@ -44,6 +44,7 @@ function rowHTML(t: RowTrack, i: number, opts: SongTableOpts): string {
   if (missing) note = '<div class="t-note">' + esc(t.note || 'Not in this folder') + '</div>';
   else if (codecBad) note = '<div class="t-note">' + esc(codecLabel(t.codec as string) + " — this browser couldn't decode it") + '</div>';
   else if (t.error) note = '<div class="t-note">' + esc(t.error) + '</div>';
+  else if (t.kind !== 'virtual' && t.splitFlag === 'cue-broken' && t.cueError) note = '<div class="t-note">' + esc(t.cueError) + '</div>';
   else if (opts.noteFor) {
     const extra = opts.noteFor(t, i);
     if (extra) note = '<div class="t-note">' + esc(extra) + '</div>';
@@ -58,13 +59,22 @@ function rowHTML(t: RowTrack, i: number, opts: SongTableOpts): string {
   const codec = codecBad
     ? '<span class="codec-badge" title="' + esc(codecLabel(t.codec as string) + " couldn't be decoded by this browser — double-click to try anyway") + '">' + esc((t.codec as string).toUpperCase()) + '</span>'
     : '';
+  /* Unsplit-rip candidate: this looks like a whole vinyl side. */
+  const split = !missing && t.kind !== 'virtual' && t.splitFlag
+    ? '<span class="split-badge" title="' +
+      esc(
+        t.splitFlag === 'cue-broken'
+          ? t.cueError || 'The cue sheet for this file is broken'
+          : 'Longer than 12 minutes with no cue sheet — use "Find track breaks" in the row menu to split it'
+      ) + '">' + (t.splitFlag === 'cue-broken' ? 'cue!' : 'unsplit?') + '</span>'
+    : '';
 
   return (
     '<div class="tr row' + (isNow ? ' playing' : '') + (selected ? ' sel' : '') + (missing ? ' dim' : '') + '"' +
     ' data-uid="' + esc(t.uid) + '" data-i="' + i + '" draggable="true" tabindex="0" role="button"' +
     ' aria-label="' + esc(t.title + ' by ' + t.artist) + '">' +
     '<div class="c-song">' + lead +
-    '<div class="t-lines"><div class="t-title trunc">' + warn + esc(t.title) + dup + codec + '</div>' + note + '</div>' +
+    '<div class="t-lines"><div class="t-title trunc">' + warn + esc(t.title) + dup + codec + split + '</div>' + note + '</div>' +
     '</div>' +
     '<div class="c-dim trunc">' + esc(t.artist) + '</div>' +
     '<div class="c-dim trunc">' + esc(t.album) + '</div>' +

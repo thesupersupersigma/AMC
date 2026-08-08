@@ -85,7 +85,10 @@
       <div id="pbArtist" class="trunc">Pick a song to start</div>
       <div class="pb-scrub">
         <span class="tt" id="pbElapsed">0:00</span>
-        <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within the track">
+        <div class="scrubwrap">
+          <canvas id="waveCanvas" aria-hidden="true"></canvas>
+          <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within the track">
+        </div>
         <span class="tt r" id="pbRemain">-0:00</span>
       </div>
     </div>
@@ -119,6 +122,20 @@
   <div id="errlist"></div>
   <footer>
     <span class="hint">Everything that failed to parse, decode or save shows up here. Press Ctrl + Shift + D to toggle this panel.</span>
+  </footer>
+</div>
+
+<div id="splitscrim" hidden></div>
+<div id="splitpanel" hidden role="dialog" aria-label="Track breaks" aria-modal="true">
+  <header>
+    <h3 id="splitTitle">Track breaks</h3>
+    <button class="pill-ghost" id="splitAdd" type="button">Add boundary at playhead</button>
+  </header>
+  <div id="splitrows"></div>
+  <footer>
+    <span class="hint" id="splitHint"></span>
+    <button class="pill-ghost" id="splitCancel" type="button">Cancel</button>
+    <button class="pill-play" id="splitSave" type="button">Save track breaks</button>
   </footer>
 </div>
 

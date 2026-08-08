@@ -10,6 +10,8 @@ import { plEdit, addEntriesToPlaylist, createPlaylist, exportM3U, playlistById, 
 import { actionEntries, actionTracks } from './songs';
 import { playList, queueAppend, queueNext } from './player';
 import { render, renderPlaylistNavOnly } from './render';
+import { runAutoSplit } from './waveform';
+import { LONG_TRACK_SEC } from '../scan/detect';
 
 export interface MenuItem {
   label?: string;
@@ -242,6 +244,16 @@ export function openRowMenu(x: number, y: number, uid: string, ctx: { playlistId
   if (n === 1 && !isMissingTrack(tracks[0]) && tracks[0].dupRefs && tracks[0].dupRefs.length) {
     const single = tracks[0];
     items.push({ label: 'Play from', icon: 'folder', sub: () => playFromSub(single) });
+  }
+  if (n === 1 && !isMissingTrack(tracks[0]) && tracks[0].kind === 'file' && (tracks[0].splitFlag || tracks[0].duration > LONG_TRACK_SEC)) {
+    const flagged = tracks[0];
+    items.push({
+      label: 'Find track breaks…',
+      icon: 'pencil',
+      onClick: () => {
+        void runAutoSplit(flagged.uid);
+      },
+    });
   }
   items.push({ sep: true });
   items.push({ label: 'Add to Playlist', icon: 'plus', sub: () => addToPlaylistSub(entries) });

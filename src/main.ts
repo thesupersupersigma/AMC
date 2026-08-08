@@ -30,6 +30,7 @@ import {
 import { toggleQueuePanel, queuePanelOpen, wireQueuePanel } from './ui/queue';
 import { closeMenu, menuOpen, wireMenus } from './ui/menu';
 import { wireSearch } from './ui/search';
+import { wireSplitEditor, wireWaveform } from './ui/waveform';
 
 /* =========================================================================
    Keyboard
@@ -192,6 +193,8 @@ async function boot(): Promise<void> {
   wireSearch();
   wireMenus();
   wireFolderUI();
+  wireWaveform();
+  wireSplitEditor();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();

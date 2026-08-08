@@ -79,7 +79,7 @@ export class FsaBackend implements FsBackend {
     this.label = root.name;
   }
 
-  async listAudioFiles(): Promise<{ path: string; file: File }[]> {
+  async listScanFiles(): Promise<{ path: string; file: File }[]> {
     const out: { path: string; file: File }[] = [];
     await this.walk(this.root, this.label, out, 0);
     out.sort((a, b) => a.path.localeCompare(b.path));
@@ -93,7 +93,7 @@ export class FsaBackend implements FsBackend {
       if (name.charAt(0) === '.' || name === AMC_DIR) continue;
       if (handle.kind === 'directory') {
         await this.walk(handle as FileSystemDirectoryHandle, prefix + '/' + name, out, depth + 1);
-      } else if (!isJunkFile(name) && AUDIO_EXT.indexOf(extOf(name)) >= 0) {
+      } else if (!isJunkFile(name) && (AUDIO_EXT.indexOf(extOf(name)) >= 0 || extOf(name) === 'cue')) {
         try {
           const file = await (handle as FileSystemFileHandle).getFile();
           out.push({ path: prefix + '/' + name, file: file });

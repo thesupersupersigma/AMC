@@ -40,6 +40,8 @@ export function mp4Walk(b: Uint8Array, start: number, end: number, absBase: numb
       if (bodyStart + 4 <= bodyEnd) mp4Walk(b, bodyStart + 4, bodyEnd, absBase, out, depth + 1);
     } else if (type === 'ilst') {
       mp4Ilst(b, bodyStart, bodyEnd, absBase, out);
+    } else if (type === 'mdia') {
+      mp4Mdia(b, bodyStart, bodyEnd, absBase, out, depth);
     } else if (MP4_CONTAINERS[type] === 1) {
       if (depth < 8) mp4Walk(b, bodyStart, bodyEnd, absBase, out, depth + 1);
     } else if (type === 'mvhd') {
@@ -91,10 +93,38 @@ function mp4Mvhd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
   if (ts > 0 && dur > 0) out.duration = dur / ts;
 }
 
+/* Each mdia is scanned for its hdlr FIRST — hdlr can sit before or after
+   mdhd, and the audio trak (handler 'soun') must win over an attached
+   picture or metadata trak whatever the box order. The transient handler
+   rides on `out` only while this mdia's children are walked. */
+function mp4Mdia(b: Uint8Array, start: number, end: number, absBase: number, out: ParsedMeta, depth: number): void {
+  let handler = '';
+  let p = start;
+  while (p + 8 <= end) {
+    let size = u32be(b, p);
+    const type = fourcc(b, p + 4);
+    let hdr = 8;
+    if (size === 1) {
+      if (p + 16 > end) break;
+      size = u64be(b, p + 8);
+      hdr = 16;
+    } else if (size === 0) {
+      size = end - p;
+    }
+    if (size < hdr || p + size > end) break;
+    /* hdlr: FullBox(4) + pre_defined(4) + handler_type(4) */
+    if (type === 'hdlr' && p + hdr + 12 <= end) handler = fourcc(b, p + hdr + 8);
+    p += size;
+  }
+  out.mdiaHandler = handler;
+  if (depth < 8) mp4Walk(b, start, end, absBase, out, depth + 1);
+  out.mdiaHandler = '';
+}
+
 /* mdhd shares mvhd's field layout exactly — version 0 stores times and
    duration as 32-bit, version 1 as 64-bit with the timescale after the two
-   8-byte times. The longest trak's media duration wins (auxiliary chapter
-   traks are never longer than the audio). */
+   8-byte times. The audio trak's media duration is authoritative; the
+   longest non-audio trak is only a fallback for files with no soun trak. */
 function mp4Mdhd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
   if (s + 4 > e) return;
   const version = b[s];
@@ -110,6 +140,9 @@ function mp4Mdhd(b: Uint8Array, s: number, e: number, out: ParsedMeta): void {
   }
   if (ts > 0 && dur > 0) {
     const sec = dur / ts;
+    if (out.mdiaHandler === 'soun') {
+      if (!out.durationAudio || sec > out.durationAudio) out.durationAudio = sec;
+    }
     if (!out.durationMdhd || sec > out.durationMdhd) out.durationMdhd = sec;
   }
 }
@@ -186,9 +219,11 @@ export function findMoov(b: Uint8Array): number {
 
 /* The mvhd movie duration is only a fallback: real muxers write garbage
    there (one Atmos rip carries mvhd ≈ real² × 0.036 × timescale) while the
-   trak-level mdhd stays correct. */
+   trak-level mdhd stays correct. Preference: the audio trak's mdhd, then
+   the longest mdhd of any trak, then mvhd. */
 function finishDuration(out: ParsedMeta): ParsedMeta {
-  if (out.durationMdhd) out.duration = out.durationMdhd;
+  if (out.durationAudio) out.duration = out.durationAudio;
+  else if (out.durationMdhd) out.duration = out.durationMdhd;
   return out;
 }
 

@@ -5,7 +5,7 @@
    the folder still works and every write stays in the IndexedDB journal. */
 
 import type { Capability, FsBackend } from '../types';
-import { isAudioFile } from '../parse/bytes';
+import { extOf, isAudioFile, isJunkFile } from '../parse/bytes';
 import { $ } from '../util';
 
 /** Opens the directory input. Must be called from a user gesture. */
@@ -37,13 +37,13 @@ export class WebkitDirBackend implements FsBackend {
         this.sidecar.set(path.slice(amc.index + amc[0].length), f);
         continue;
       }
-      if (isAudioFile(f)) this.files.push({ path: path, file: f });
+      if (isAudioFile(f) || (!isJunkFile(f.name) && extOf(f.name) === 'cue')) this.files.push({ path: path, file: f });
     }
     this.label = root || 'Music';
     this.files.sort((a, b) => a.path.localeCompare(b.path));
   }
 
-  listAudioFiles(): Promise<{ path: string; file: File }[]> {
+  listScanFiles(): Promise<{ path: string; file: File }[]> {
     return Promise.resolve(this.files.slice());
   }
 

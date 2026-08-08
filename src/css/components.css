@@ -109,6 +109,12 @@
 .pb-scrub{display:grid;grid-template-columns:30px 1fr 34px;gap:7px;align-items:center;margin-top:3px}
 .pb-scrub .tt{font-size:9.5px;color:var(--text-dim);font-variant-numeric:tabular-nums;line-height:1}
 .pb-scrub .tt.r{text-align:right}
+.scrubwrap{position:relative;min-width:0;height:22px;display:flex;align-items:center}
+#waveCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity .25s ease}
+#waveCanvas.has-wave{opacity:1;pointer-events:auto}
+.scrubwrap input[type=range]{position:relative;width:100%;z-index:2}
+/* When the waveform is up it IS the track visual; the slider keeps only its thumb. */
+.scrubwrap:has(#waveCanvas.has-wave) input[type=range]::-webkit-slider-runnable-track{background:transparent}
 .pb-right{display:flex;align-items:center;gap:2px}
 .volwrap{display:flex;align-items:center;gap:6px;padding-right:2px}
 .volwrap input[type=range]{width:0;opacity:0;transition:width .18s ease,opacity .18s ease}
@@ -244,6 +250,32 @@ input[type=range]:hover::-webkit-slider-runnable-track{--fg:var(--accent)}
   font-size:9.5px;font-weight:700;line-height:1.5;vertical-align:1px;
   background:rgba(255,179,64,.14);color:#ffb340;
 }
+
+/* Unsplit-rip candidate (long file, no cue) or a broken cue. */
+.split-badge{
+  display:inline-block;margin-left:7px;padding:0 5px;border-radius:4px;
+  font-size:9.5px;font-weight:700;line-height:1.5;vertical-align:1px;
+  background:rgba(90,200,250,.14);color:#5ac8fa;
+}
+
+/* ---------------- track-break editor ---------------- */
+#splitscrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:110}
+#splitpanel{
+  position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(640px,calc(100vw - 60px));height:min(460px,calc(100vh - 90px));
+  background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);
+  display:flex;flex-direction:column;z-index:120;border:1px solid rgba(255,255,255,.08);
+}
+#splitpanel header{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;border-bottom:1px solid var(--hairline)}
+#splitpanel h3{margin:0;font-size:15px;font-weight:600;flex:1}
+#splitrows{flex:1;overflow-y:auto;padding:10px 16px}
+#splitpanel footer{padding:10px 16px;border-top:1px solid var(--hairline);display:flex;gap:8px;align-items:center}
+#splitpanel .hint{font-size:11px;color:var(--text-dim);margin-right:auto}
+.split-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--hairline)}
+.split-time{font-size:12.5px;font-variant-numeric:tabular-nums;width:64px}
+.split-nudge{padding:4px 10px;font-size:11px}
+.split-name{flex:1;min-width:0}
+.split-del{width:26px;flex:0 0 26px}
 
 /* ---------------- service worker update prompt ---------------- */
 #swUpdate{

@@ -6,6 +6,16 @@ export const audio = document.getElementById('audio') as HTMLAudioElement;
 export const probe = document.getElementById('probe') as HTMLAudioElement;
 
 let currentURL = '';
+/** refOf(folderId, sourcePath) of the file the element currently holds —
+    what lets contiguous cue tracks advance without a reload. */
+let loadedSrcKey = '';
+
+export function getLoadedSrcKey(): string {
+  return loadedSrcKey;
+}
+export function setLoadedSrcKey(key: string): void {
+  loadedSrcKey = key;
+}
 
 export function revokeCurrentURL(): void {
   if (currentURL) {
@@ -16,6 +26,7 @@ export function revokeCurrentURL(): void {
     }
     currentURL = '';
   }
+  loadedSrcKey = '';
 }
 
 /** Mints the object URL for a track's file and remembers it for revocation.

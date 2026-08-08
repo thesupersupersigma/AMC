@@ -1,9 +1,10 @@
 /* Playback: the queue, transport, Media Session, player bar UI, and
    restore-last-track. */
 
-import type { AnyTrack, RowTrack, TrackRec } from '../types';
+import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
 import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
-import { audio, createTrackURL, revokeCurrentURL } from '../audio/engine';
+import { audio, createTrackURL, getLoadedSrcKey, revokeCurrentURL, setLoadedSrcKey } from '../audio/engine';
+import { drawWaveformProgress, waveformTrackChanged } from './waveform';
 import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
 import { icon, solid, artHTML } from './icons';
@@ -92,26 +93,48 @@ export function playAt(index: number, autoplay?: boolean): void {
   loadTrack(S.queue[S.qi], autoplay !== false);
 }
 
+/** The file behind a track: a virtual track plays a window of its source. */
+export function sourcePathOf(t: AnyTrack): string {
+  return t.kind === 'virtual' ? t.sourcePath : t.path;
+}
+
 function loadTrack(t: AnyTrack, autoplay: boolean): void {
   if (!t) return;
   if (!t.file) {
     logErr('playback', 'No file behind ' + t.title, t.path);
     return skipAfterFailure();
   }
-  revokeCurrentURL();
-  let url: string;
-  try {
-    url = createTrackURL(t.file);
-  } catch (e) {
-    logErr('playback', 'Could not open ' + t.title, (e as Error) && (e as Error).message);
-    return skipAfterFailure();
+  const srcKey = refOf(t.folderId, sourcePathOf(t));
+  /* Another window of the file already in the element (a cue track of the
+     same rip): keep the decoded stream, just move the playhead. */
+  const reuse = srcKey === getLoadedSrcKey() && !!audio.src;
+  if (!reuse) {
+    revokeCurrentURL();
+    let url: string;
+    try {
+      url = createTrackURL(t.file);
+    } catch (e) {
+      logErr('playback', 'Could not open ' + t.title, (e as Error) && (e as Error).message);
+      return skipAfterFailure();
+    }
+    audio.src = url;
+    audio.load();
+    setLoadedSrcKey(srcKey);
   }
   S.current = t;
   S.lastPos = 0;
   trackLoadedAt = performance.now();
   if (autoplay) playbackArmed = true;
-  audio.src = url;
-  audio.load();
+  const startAt = t.kind === 'virtual' ? t.startSec : 0;
+  if (reuse) {
+    try {
+      audio.currentTime = startAt;
+    } catch {
+      pendingSeek = startAt;
+    }
+  } else if (startAt > 0) {
+    pendingSeek = startAt; /* applied on loadedmetadata */
+  }
   if (autoplay) {
     const p = audio.play();
     if (p && p.catch)
@@ -131,14 +154,75 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
   });
   savePrefs();
   render();
+  void waveformTrackChanged();
+  startBoundaryLoop();
+}
+
+/* ---------- cue boundaries ------------------------------------------------
+   Driven from requestAnimationFrame — timeupdate fires ~4×/sec, far too
+   coarse for a clean edge. timeupdate still runs the same check as a net
+   for hidden tabs, where rAF is suspended. */
+
+let boundaryRaf = 0;
+
+function startBoundaryLoop(): void {
+  if (boundaryRaf) return;
+  boundaryRaf = requestAnimationFrame(boundaryTick);
+}
+
+function boundaryTick(): void {
+  boundaryRaf = 0;
+  drawWaveformProgress();
+  const c = S.current;
+  if (!c || audio.paused) return; /* the 'play' listener restarts the loop */
+  if (c.kind === 'virtual') checkCueBoundary(c);
+  boundaryRaf = requestAnimationFrame(boundaryTick);
+}
+
+function checkCueBoundary(c: VirtualTrack): void {
+  if (!(c.endSec > 0)) return; /* open-ended: the file's own 'ended' rules */
+  if (audio.currentTime < c.endSec - 0.02) return;
+  if (S.repeat === 'one') {
+    try {
+      audio.currentTime = c.startSec;
+    } catch {
+      /* not seekable right now; the next tick retries */
+    }
+    return;
+  }
+  const ni = S.qi + 1;
+  const nxt = ni < S.queue.length ? S.queue[ni] : null;
+  if (
+    nxt &&
+    nxt.kind === 'virtual' &&
+    nxt.folderId === c.folderId &&
+    nxt.sourcePath === c.sourcePath &&
+    Math.abs(nxt.startSec - c.endSec) < 0.1
+  ) {
+    /* Contiguous within one already-decoded stream: no seek, no reload —
+       just update current-track state. True gapless playback. */
+    S.qi = ni;
+    S.current = nxt;
+    S.lastPos = audio.currentTime;
+    syncPlayerUI();
+    updatePlayingRows();
+    updateMediaSession(nxt);
+    savePrefs();
+    void waveformTrackChanged();
+    return;
+  }
+  audio.pause();
+  next(false);
 }
 
 /** A genuine decode failure for this track's fourcc: mark the codec for the
     session (unless a sibling with the same fourcc already played — then it
     is one broken file, not a missing decoder) and badge every track sharing
-    it. Never pre-emptive — only an actual attempt lands here. */
-function noteCodecFailure(t: AnyTrack): void {
-  if (!markCodecFailed(t.codec)) return;
+    it. MEDIA_ERR_SRC_NOT_SUPPORTED forces the mark: it is a codec-level
+    verdict that outranks a "working" mark a silent broken stream may have
+    earned. Never pre-emptive — only an actual attempt lands here. */
+function noteCodecFailure(t: AnyTrack, force?: boolean): void {
+  if (!markCodecFailed(t.codec, force)) return;
   logErr(
     'playback',
     'This browser could not decode ' + codecLabel(t.codec as string) + ' (' + t.codec + ')',
@@ -168,7 +252,7 @@ function skipAfterFailure(): void {
 export function next(manual: boolean, afterFailure?: boolean): void {
   if (!S.queue.length) return;
   if (!manual && !afterFailure && S.repeat === 'one') {
-    audio.currentTime = 0;
+    audio.currentTime = scrubWindow().base;
     audio.play().catch(() => {
       /* stay paused */
     });
@@ -190,13 +274,14 @@ export function next(manual: boolean, afterFailure?: boolean): void {
 
 export function prev(): void {
   if (!S.queue.length) return;
-  if (audio.currentTime > 3) {
-    audio.currentTime = 0;
+  const base = scrubWindow().base;
+  if (audio.currentTime - base > 3) {
+    audio.currentTime = base;
     return;
   }
   if (S.qi <= 0) {
     if (S.repeat === 'all') return playAt(S.queue.length - 1, true);
-    audio.currentTime = 0;
+    audio.currentTime = base;
     return;
   }
   playAt(S.qi - 1, true);
@@ -381,9 +466,21 @@ export function syncPlayerUI(): void {
   if (queuePanelOpen()) renderQueuePanel();
 }
 
+/** The scrub window: a virtual track scrubs within [startSec, endSec] of
+    its source file; everything else scrubs the whole file. */
+function scrubWindow(): { base: number; span: number } {
+  const c = S.current;
+  if (c && c.kind === 'virtual') {
+    const end = c.endSec > 0 ? c.endSec : isFinite(audio.duration) && audio.duration > 0 ? audio.duration : c.startSec + (c.duration || 0);
+    return { base: c.startSec, span: Math.max(0, end - c.startSec) };
+  }
+  return { base: 0, span: isFinite(audio.duration) && audio.duration > 0 ? audio.duration : c ? c.duration : 0 };
+}
+
 function syncTimeUI(): void {
-  const d = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : S.current ? S.current.duration : 0;
-  const c = audio.currentTime || 0;
+  const w = scrubWindow();
+  const d = w.span;
+  const c = clamp((audio.currentTime || 0) - w.base, 0, d > 0 ? d : Infinity);
   if (!seeking) {
     const el = $<HTMLInputElement>('#scrub');
     const ratio = d > 0 ? c / d : 0;
@@ -415,17 +512,17 @@ export function wirePlayerBar(): void {
   });
   scrub.addEventListener('input', () => {
     seeking = true;
-    const d = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+    const d = scrubWindow().span;
     const ratio = Number(scrub.value) / 1000;
     setRangeFill(scrub, ratio);
     $('#pbElapsed').textContent = fmtTime(ratio * d);
     $('#pbRemain').textContent = d > 0 ? '-' + fmtTime(Math.max(0, d - ratio * d)) : '--:--';
   });
   const commit = (): void => {
-    const d = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
-    if (d > 0) {
+    const w = scrubWindow();
+    if (w.span > 0) {
       try {
-        audio.currentTime = clamp((Number(scrub.value) / 1000) * d, 0, d);
+        audio.currentTime = w.base + clamp((Number(scrub.value) / 1000) * w.span, 0, w.span);
       } catch {
         /* not seekable yet */
       }
@@ -457,6 +554,7 @@ export function wireAudio(): void {
     S.playing = true;
     syncPlayerUI();
     updatePlayingRows();
+    startBoundaryLoop();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
   audio.addEventListener('pause', () => {
@@ -488,11 +586,18 @@ export function wireAudio(): void {
   });
   audio.addEventListener('timeupdate', () => {
     syncTimeUI();
+    /* Hidden tabs suspend requestAnimationFrame; this ~4 Hz check is the
+       coarse safety net that keeps cue boundaries working there. */
+    if (S.current && S.current.kind === 'virtual' && !audio.paused) checkCueBoundary(S.current);
     /* Only real elapsed playback clears the failure streak — and proves the
-       codec, withdrawing any earlier session verdict against its fourcc. */
+       codec, withdrawing any earlier session verdict against its fourcc.
+       "Real" requires decoded bytes where the browser exposes the counter:
+       a missing decoder can advance the clock over silence, and that false
+       proof would veto the codec mark for the whole session. */
     if (performance.now() - trackLoadedAt > 1200) {
       failStreak = 0;
-      if (S.current && markCodecWorking(S.current.codec)) {
+      const decodedBytes = (audio as HTMLMediaElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount;
+      if ((decodedBytes === undefined || decodedBytes > 0) && S.current && markCodecWorking(S.current.codec)) {
         logErr('playback', codecLabel(S.current.codec as string) + ' plays after all — removing the codec badge', S.current.path);
         scheduleRender();
       }
@@ -536,8 +641,8 @@ export function wireAudio(): void {
       logErr('playback', 'Could not play ' + t.title, t.path + ' — ' + why);
       /* MEDIA_ERR_DECODE (3) and MEDIA_ERR_SRC_NOT_SUPPORTED (4) are the
          genuine decode failures; network/abort errors say nothing about
-         the codec. */
-      if (code === 3 || code === 4) noteCodecFailure(t);
+         the codec. Code 4 is codec-level and forces the mark. */
+      if (code === 3 || code === 4) noteCodecFailure(t, code === 4);
       scheduleRender();
     }
     skipAfterFailure();
@@ -569,9 +674,11 @@ export function restoreLastTrack(): boolean {
   try {
     audio.src = createTrackURL(t.file); /* loaded but deliberately paused */
     audio.load();
+    setLoadedSrcKey(refOf(t.folderId, sourcePathOf(t)));
   } catch (e) {
     logErr('playback', 'Could not reopen the last track', (e as Error) && (e as Error).message);
   }
   updateMediaSession(t);
+  void waveformTrackChanged();
   return true;
 }
