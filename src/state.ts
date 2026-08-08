@@ -1,17 +1,29 @@
 /* App state, the library index, artwork caches, and preferences. */
 
-import type { Album, AnyTrack, Artist, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
+import type { Album, AnyTrack, Artist, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
 import { $$, clamp, norm } from './util';
-import { ST_COVERS, idbPut } from './db/idb';
+import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
 
-/* Phase 1 is single-folder; every track carries this id so multi-folder
-   support (Phase 2) lands without touching identity everywhere. */
-export const FOLDER_ID = 'local';
+/** Stored-data schema. 2 = real folderIds everywhere (the Phase 1 'local'
+    placeholder is never persisted). Written to IDB meta and every sidecar
+    settings.json; Phase 5's migration machinery keys off it. */
+export const SCHEMA_VERSION = 2;
+
+/* Track identity is folderId + path, never path alone. The separator is a
+   control character no filesystem allows in names. */
+const SEP = String.fromCharCode(1);
+export function refOf(folderId: string, path: string): string {
+  return folderId + SEP + path;
+}
 
 export interface AppState {
   tracks: AnyTrack[];
   byUid: Record<string, RowTrack>;
+  /** refOf(folderId, path) → track. The canonical lookup. */
+  byRef: Record<string, AnyTrack>;
+  /** Bare path → track, first folder (by order) wins. Kept for legacy
+      playlists, M3U matching and the Phase 1 lastPath pref. */
   byPath: Record<string, AnyTrack>;
   albums: Album[];
   albumMap: Record<string, Album>;
@@ -41,7 +53,7 @@ export interface AppState {
 }
 
 export const S: AppState = {
-  tracks: [], byUid: {}, byPath: {},
+  tracks: [], byUid: {}, byRef: {}, byPath: {},
   albums: [], albumMap: {},
   artists: [], artistMap: {},
   playlists: [],
@@ -77,13 +89,22 @@ export function albumDirOf(path: string): string {
   return dir;
 }
 
+/** The album folder with the library-root segment stripped: the same album
+    living in two differently-named roots ("Music/…" and "Backup/…") must
+    group as one album, not two. Root-level files return ''. */
+function albumKeyDirOf(path: string): string {
+  const dir = albumDirOf(path);
+  const i = dir.indexOf('/');
+  return i < 0 ? '' : dir.slice(i + 1);
+}
+
 /** v1 keyed albums on tags alone, which collapsed two editions of the same
     album — Thriller and Thriller 25 both tag as "Michael Jackson||thriller"
     and became one 17-track album. Folding the album's own folder path into
     the key keeps editions apart; tracks with no path keep the old key. */
 export function albumKeyOf(rec: Pick<Track, 'albumArtist' | 'artist' | 'album'> & { path?: string }): string {
   const base = norm(rec.albumArtist || rec.artist) + '||' + norm(rec.album);
-  const dir = rec.path ? albumDirOf(rec.path) : '';
+  const dir = rec.path ? albumKeyDirOf(rec.path) : '';
   return dir ? base + '||' + norm(dir) : base;
 }
 
@@ -114,12 +135,20 @@ export function rebuildIndex(): void {
   S.albums = [];
   S.artistMap = {};
   S.artists = [];
+  S.byRef = {};
   S.byPath = {};
   S.byUid = {};
   for (let i = 0; i < S.tracks.length; i++) {
     const t = S.tracks[i];
-    S.byPath[t.path] = t;
+    S.byRef[refOf(t.folderId, t.path)] = t;
+    /* First folder by order wins the bare-path lookup; S.tracks is kept in
+       folder order by the scanner, and a shadowed copy never displaces its
+       primary. */
+    if (!S.byPath[t.path] || (S.byPath[t.path].shadowed && !t.shadowed)) S.byPath[t.path] = t;
     S.byUid[t.uid] = t;
+    /* Shadowed duplicate copies stay reachable through byRef/byUid but are
+       not library rows of their own. */
+    if (t.shadowed) continue;
     const ak = t.coverKey;
     let al = S.albumMap[ak];
     if (!al) {
@@ -164,6 +193,13 @@ export function albumDuration(al: Album): number {
 
 export function isPlayableTrack(t: RowTrack | null | undefined): t is AnyTrack & { file: File } {
   return !!t && t.kind !== 'missing' && !!(t as AnyTrack).file;
+}
+
+/** The library rows: every track except shadowed duplicate copies. The
+    copies stay reachable via byRef and the "Play from" menu — merged, not
+    hidden — but they are never rows of their own. */
+export function libraryTracks(): AnyTrack[] {
+  return S.tracks.filter((t) => !t.shadowed);
 }
 export function isMissingTrack(t: RowTrack): t is MissingTrack {
   return t.kind === 'missing';
@@ -280,13 +316,17 @@ export function storeCover(key: string, blob: Blob | null): Promise<void> {
     });
 }
 
-/* ---------- localStorage preferences — also fully guarded ---------- */
+/* ---------- preferences ------------------------------------------------
+   Global app preferences live in IndexedDB (canonical), with localStorage
+   as a same-tick fallback for environments where the database is broken.
+   folders.ts registers a mirror hook that copies them into the first
+   folder's sidecar as a convenience copy. Every path is guarded. ---------- */
 
 const PREF_KEY = 'tsss_player_prefs';
 
 export const PREFS: Prefs = {};
 
-export function loadPrefs(): Prefs {
+function loadLocalPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREF_KEY);
     return raw ? (JSON.parse(raw) as Prefs) : {};
@@ -296,32 +336,58 @@ export function loadPrefs(): Prefs {
   }
 }
 
+let prefsMirror: ((prefs: Prefs) => void) | null = null;
+export function setPrefsMirror(fn: (prefs: Prefs) => void): void {
+  prefsMirror = fn;
+}
+
+export function currentPrefs(): Prefs {
+  const cur = S.current;
+  return {
+    volume: S.volume,
+    muted: S.muted,
+    shuffle: S.shuffle,
+    repeat: S.repeat,
+    view: S.view,
+    lastPath: cur ? cur.path : '',
+    lastRef: cur ? { folderId: cur.folderId, path: cur.path } : undefined,
+    lastPos: S.lastPos || 0,
+    sort: S.sort,
+  };
+}
+
 let prefsTimer: ReturnType<typeof setTimeout> | null = null;
 export function savePrefs(): void {
   if (prefsTimer) clearTimeout(prefsTimer);
   prefsTimer = setTimeout(() => {
+    const prefs = currentPrefs();
     try {
-      localStorage.setItem(
-        PREF_KEY,
-        JSON.stringify({
-          volume: S.volume,
-          muted: S.muted,
-          shuffle: S.shuffle,
-          repeat: S.repeat,
-          view: S.view,
-          lastPath: S.current ? S.current.path : '',
-          lastPos: S.lastPos || 0,
-          sort: S.sort,
-        })
-      );
+      localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
     } catch (e) {
       logErr('settings', 'Could not save settings', (e as Error).message);
+    }
+    void idbPut(ST_META, { key: 'app', schemaVersion: SCHEMA_VERSION, prefs: prefs } as MetaRec);
+    if (prefsMirror) {
+      try {
+        prefsMirror(prefs);
+      } catch (e) {
+        logErr('settings', 'Could not mirror settings to the sidecar', (e as Error).message);
+      }
     }
   }, 300);
 }
 
-export function seedStateFromPrefs(): void {
-  Object.assign(PREFS, loadPrefs());
+/** Reads prefs — IndexedDB meta first, localStorage fallback — and seeds S.
+    Call after idbOpen. Also stamps the meta schemaVersion on first run. */
+export async function seedStateFromPrefs(): Promise<void> {
+  const meta = await idbGet<MetaRec>(ST_META, 'app');
+  const stored = meta && meta.prefs ? meta.prefs : loadLocalPrefs();
+  if (!meta) {
+    /* First run on the v2 schema: adopt whatever localStorage had and stamp
+       the schema version so Phase 5 has a baseline to migrate from. */
+    void idbPut(ST_META, { key: 'app', schemaVersion: SCHEMA_VERSION, prefs: stored } as MetaRec);
+  }
+  Object.assign(PREFS, stored);
   S.volume = typeof PREFS.volume === 'number' ? clamp(PREFS.volume, 0, 1) : 1;
   S.muted = !!PREFS.muted;
   S.shuffle = !!PREFS.shuffle;

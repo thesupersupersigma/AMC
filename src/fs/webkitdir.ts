@@ -1,11 +1,81 @@
-/* The `<input webkitdirectory>` picker — read-only, session-scoped. This is
-   the only picker in Phase 1, exactly as in v1; Phase 2 adds the File System
-   Access backend behind fs/adapter.ts. */
+/* The `<input webkitdirectory>` backend — read-only, session-scoped. This is
+   the Safari and file:// path, and it is expected, not an error: Safari
+   implements no local-disk pickers at all. Some browsers exclude dot-entries
+   from directory picks, so the sidecar may be invisible here; when it is,
+   the folder still works and every write stays in the IndexedDB journal. */
 
+import type { Capability, FsBackend } from '../types';
+import { isAudioFile } from '../parse/bytes';
 import { $ } from '../util';
 
+/** Opens the directory input. Must be called from a user gesture. */
 export function pickFolder(): void {
   const input = $<HTMLInputElement>('#picker');
   input.value = '';
   input.click();
+}
+
+export class WebkitDirBackend implements FsBackend {
+  readonly kind = 'webkitdir' as const;
+  readonly capability: Capability = 'read';
+  readonly label: string;
+  private files: { path: string; file: File }[] = [];
+  /** Path under .AMC/ → File, when the browser included dot-entries. */
+  private sidecar = new Map<string, File>();
+
+  constructor(fileList: FileList | File[]) {
+    const all: File[] = Array.prototype.slice.call(fileList);
+    let root = '';
+    for (const f of all) {
+      const path = f.webkitRelativePath || f.name;
+      if (!root && path.indexOf('/') > 0) root = path.slice(0, path.indexOf('/'));
+      const amcAt = path.indexOf('/.AMC/');
+      if (amcAt >= 0) {
+        this.sidecar.set(path.slice(amcAt + 6), f);
+        continue;
+      }
+      if (isAudioFile(f)) this.files.push({ path: path, file: f });
+    }
+    this.label = root || 'Music';
+    this.files.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  listAudioFiles(): Promise<{ path: string; file: File }[]> {
+    return Promise.resolve(this.files.slice());
+  }
+
+  async readSidecarText(relPath: string): Promise<string | null> {
+    const f = this.sidecar.get(relPath);
+    if (!f) return null;
+    try {
+      return await f.text();
+    } catch {
+      return null;
+    }
+  }
+
+  listSidecarDir(relPath: string): Promise<string[]> {
+    const prefix = relPath ? relPath.replace(/\/+$/, '') + '/' : '';
+    const names: string[] = [];
+    this.sidecar.forEach((_f, rel) => {
+      if (rel.indexOf(prefix) === 0) {
+        const rest = rel.slice(prefix.length);
+        if (rest && rest.indexOf('/') < 0) names.push(rest);
+      }
+    });
+    names.sort();
+    return Promise.resolve(names);
+  }
+
+  writeSidecarText(relPath: string): Promise<void> {
+    return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not written)'));
+  }
+
+  removeSidecarFile(relPath: string): Promise<void> {
+    return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not removed)'));
+  }
+
+  ensureSidecarLayout(): Promise<void> {
+    return Promise.resolve();
+  }
 }

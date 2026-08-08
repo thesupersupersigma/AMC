@@ -3,54 +3,92 @@
 
 import { logErr } from '../ui/log';
 
-const DB_NAME = 'tsss_player',
-  DB_VER = 1;
+/* v1 → v2 adds the 'folders' store (persisted directory handles and folder
+   order) and the 'meta' store (global prefs + stored-data schemaVersion).
+   The three v1 stores carry over untouched — the parse cache is keyed by
+   content (name|size|lastModified), so it is folder-agnostic and stays valid.
+
+   The open is self-healing: after opening, the store list is verified, and
+   any missing store is created through a version bump. A database whose
+   version ran ahead of its stores (a half-applied upgrade) repairs itself
+   instead of failing every folder and meta write forever. */
+const DB_NAME = 'tsss_player';
 export const ST_TRACKS = 'tracks',
   ST_COVERS = 'covers',
-  ST_PLAYLISTS = 'playlists';
+  ST_PLAYLISTS = 'playlists',
+  ST_FOLDERS = 'folders',
+  ST_META = 'meta';
+
+const STORE_DEFS: Array<[string, string]> = [
+  [ST_TRACKS, 'key'],
+  [ST_COVERS, 'key'],
+  [ST_PLAYLISTS, 'id'],
+  [ST_FOLDERS, 'folderId'],
+  [ST_META, 'key'],
+];
 
 let db: IDBDatabase | null = null;
 let idbOK = true;
 
-export function idbOpen(): Promise<boolean> {
+function ensureStores(d: IDBDatabase): void {
+  for (const [name, keyPath] of STORE_DEFS) {
+    if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, { keyPath: keyPath });
+  }
+}
+
+function openDb(version?: number): Promise<IDBDatabase | null> {
   return new Promise((res) => {
     let req: IDBOpenDBRequest;
     try {
-      req = indexedDB.open(DB_NAME, DB_VER);
+      req = version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
     } catch (e) {
-      idbOK = false;
       logErr('cache', 'IndexedDB is unavailable, running from memory only', (e as Error).message);
-      return res(false);
+      return res(null);
     }
     req.onupgradeneeded = () => {
       try {
-        const d = req.result;
-        if (!d.objectStoreNames.contains(ST_TRACKS)) d.createObjectStore(ST_TRACKS, { keyPath: 'key' });
-        if (!d.objectStoreNames.contains(ST_COVERS)) d.createObjectStore(ST_COVERS, { keyPath: 'key' });
-        if (!d.objectStoreNames.contains(ST_PLAYLISTS)) d.createObjectStore(ST_PLAYLISTS, { keyPath: 'id' });
+        ensureStores(req.result);
       } catch (e) {
         logErr('cache', 'Could not create the database stores', (e as Error).message);
       }
     };
     req.onsuccess = () => {
-      db = req.result;
-      db.onerror = (ev) => {
-        const t = ev.target as IDBRequest | null;
-        logErr('cache', 'Database error', t && t.error && t.error.message);
-      };
-      res(true);
+      res(req.result);
     };
     req.onerror = () => {
-      idbOK = false;
       logErr('cache', 'Could not open the cache, running from memory only', req.error && req.error.message);
-      res(false);
+      res(null);
     };
     req.onblocked = () => {
-      idbOK = false;
       logErr('cache', 'The cache is locked by another tab, running from memory only', '');
-      res(false);
+      res(null);
     };
   });
+}
+
+export async function idbOpen(): Promise<boolean> {
+  /* No explicit version: a fresh profile creates everything at version 1;
+     an existing database opens at whatever version it reached. */
+  let d = await openDb();
+  if (d) {
+    const missing = STORE_DEFS.filter(([name]) => !d!.objectStoreNames.contains(name)).map(([name]) => name);
+    if (missing.length) {
+      const bumped = d.version + 1;
+      d.close();
+      logErr('cache', 'Repairing the database stores', 'missing: ' + missing.join(', '));
+      d = await openDb(bumped);
+    }
+  }
+  if (!d) {
+    idbOK = false;
+    return false;
+  }
+  db = d;
+  db.onerror = (ev) => {
+    const t = ev.target as IDBRequest | null;
+    logErr('cache', 'Database error', t && t.error && t.error.message);
+  };
+  return true;
 }
 
 function idbRun(store: string, mode: IDBTransactionMode, fn: (o: IDBObjectStore) => IDBRequest | undefined): Promise<unknown> {

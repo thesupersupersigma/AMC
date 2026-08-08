@@ -1,23 +1,28 @@
-/* Scanning: parse dispatch, the progressive scan loop (yields to the event
-   loop every 8 files), duration backfill, and rescan. */
+/* Scanning: parse dispatch, the per-folder progressive scan loop (yields to
+   the event loop every 8 files), duration backfill, and rescan. Folders scan
+   one at a time through a queue; each scan replaces only that folder's
+   tracks, then the whole library re-indexes and re-merges duplicates. */
 
-import type { FileTrack, ParsedMeta, TrackRec } from '../types';
-import { extOf, isAudioFile, AUDIO_EXT } from '../parse/bytes';
+import type { AnyTrack, ConnectedFolder, FileTrack, ParsedMeta, TrackRec } from '../types';
+import { extOf } from '../parse/bytes';
 import { parseFlac, flacPicture } from '../parse/flac';
 import { parseMp4 } from '../parse/mp4';
 import { parseId3 } from '../parse/id3';
-import { FOLDER_ID, S, albumKeyOf, editionOf, haveCover, releaseCovers, setCoverLocal, storeCover, rebuildIndex } from '../state';
+import { S, albumKeyOf, editionOf, haveCover, refOf, releaseCovers, setCoverLocal, storeCover, rebuildIndex } from '../state';
 import { ST_COVERS, ST_TRACKS, idbClear, idbGet, idbPut } from '../db/idb';
 import { logErr } from '../ui/log';
 import { $, tick, toast } from '../util';
 import { render, scheduleRender } from '../ui/render';
 import { restoreLastTrack } from '../ui/player';
-import { pickFolder } from '../fs/webkitdir';
+import { adoptLegacyPlaylists, reflushFolderPlaylists } from '../ui/playlists';
+import { applyDedupe } from './dedupe';
+import { buildLibraryJson, queueSidecarWrite } from '../fs/amcdir';
+import { connectedFolders, folderOrder } from '../fs/folders';
 import { probe } from '../audio/engine';
 import type { CoverRec } from '../types';
 
 /* ---------- path fallback --------------------------------------------------
-   webkitRelativePath is Root/Artist/Album/NN Title.ext.
+   Library paths are Root/Artist/Album/NN Title.ext.
    The library never shows "Unknown" — worst case it shows the folder names. */
 export function fromPath(path: string, name: string): { title: string; album: string; artist: string; trackNo: number } {
   const parts = String(path || name).split('/');
@@ -108,11 +113,11 @@ export function extractArt(file: File): Promise<Blob | null> {
 /* ---------- scan ---------- */
 let uidSeq = 0;
 
-export function recToTrack(rec: TrackRec, file?: File): FileTrack {
+export function recToTrack(rec: TrackRec, folderId: string, file?: File): FileTrack {
   return {
     kind: 'file',
     uid: 't' + ++uidSeq,
-    folderId: FOLDER_ID,
+    folderId: folderId,
     cacheKey: rec.key,
     path: rec.path,
     file: file,
@@ -129,8 +134,8 @@ export function recToTrack(rec: TrackRec, file?: File): FileTrack {
     size: rec.size || 0,
     added: rec.added || 0,
     hasArt: !!rec.hasArt,
-    /* Recomputed on every load — the fixed key folds in the folder path, and
-       rows cached by v1 carry the old tag-only key. */
+    /* Recomputed on every load — the key folds in the album folder, and
+       rows cached by earlier versions carry older key shapes. */
     coverKey: albumKeyOf(rec),
     edition: editionOf(rec.path, rec.album),
     error: '',
@@ -140,6 +145,7 @@ export function recToTrack(rec: TrackRec, file?: File): FileTrack {
 export function resetLibrary(): void {
   S.tracks = [];
   S.byUid = {};
+  S.byRef = {};
   S.byPath = {};
   S.albums = [];
   S.albumMap = {};
@@ -150,46 +156,42 @@ export function resetLibrary(): void {
   releaseCovers();
 }
 
-export function onFilesPicked(fileList: FileList): void {
-  const files: File[] = [];
-  for (let i = 0; i < fileList.length; i++) {
-    /* Skip anything that is not audio, silently. Folders hold stems,
-       artwork, .DS_Store and session files we must never touch. */
-    if (isAudioFile(fileList[i])) files.push(fileList[i]);
-  }
-  /* Without persistence ChromeOS can evict the service worker cache and
-     IndexedDB, and the app one day simply fails to load. */
-  try {
-    if (navigator.storage && navigator.storage.persist) {
-      void navigator.storage.persist().then((granted) => {
-        if (!granted) logErr('storage', 'Persistent storage was not granted', 'the browser may evict caches under pressure');
-      });
-    }
-  } catch {
-    /* nothing to do — the cache simply stays evictable */
-  }
-  if (!files.length) {
-    S.hasFolder = true;
-    $('#empty').hidden = true;
-    $('#app').hidden = false;
-    $('#playerbar').hidden = false;
-    resetLibrary();
-    rebuildIndex();
-    render();
-    toast('No playable audio in that folder. Try the folder that holds the album folders.');
-    logErr('scan', 'The chosen folder had no files with a supported extension', 'looked for ' + AUDIO_EXT.join(', '));
-    return;
-  }
-  files.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
-  void scanFiles(files);
+/** One finished index pass: merge duplicates across folders, rebuild. */
+function reindexLibrary(): void {
+  /* Keep S.tracks in folder order so first-wins lookups follow priority. */
+  S.tracks.sort((a, b) => folderOrder(a.folderId) - folderOrder(b.folderId) || a.path.localeCompare(b.path));
+  applyDedupe(S.tracks, folderOrder);
+  rebuildIndex();
 }
 
-export async function scanFiles(files: File[]): Promise<void> {
-  S.hasFolder = true;
-  $('#empty').hidden = true;
-  $('#app').hidden = false;
-  $('#playerbar').hidden = false;
-  resetLibrary();
+/* Folders scan strictly one at a time; the chain is the queue. */
+let scanChain: Promise<void> = Promise.resolve();
+let restoredOnce = false;
+
+export function enqueueFolderScan(folder: ConnectedFolder): void {
+  scanChain = scanChain
+    .then(() => scanFolder(folder))
+    .catch((e: Error) => {
+      S.scanning = false;
+      logErr('scan', "The scan of '" + folder.label + "' stopped early", e && e.message);
+      reindexLibrary();
+      updateScanChip();
+      render();
+    });
+}
+
+async function scanFolder(folder: ConnectedFolder): Promise<void> {
+  const files = await folder.backend.listAudioFiles();
+  /* Replace only this folder's rows; other folders keep playing. */
+  S.tracks = S.tracks.filter((t) => t.folderId !== folder.folderId);
+
+  if (!files.length) {
+    toast("No playable audio in '" + folder.label + "'. Try the folder that holds the album folders.");
+    logErr('scan', "'" + folder.label + "' had no files with a supported extension", '');
+    reindexLibrary();
+    render();
+    return;
+  }
 
   S.scanning = true;
   S.scanDone = 0;
@@ -199,118 +201,124 @@ export async function scanFiles(files: File[]): Promise<void> {
 
   const pendingCovers: Record<string, boolean> = {};
 
-  try {
-    for (let idx = 0; idx < files.length; idx++) {
-      const file = files[idx];
-      const path = file.webkitRelativePath || file.name;
-      const key = file.name + '|' + file.size + '|' + file.lastModified;
+  for (let idx = 0; idx < files.length; idx++) {
+    const file = files[idx].file;
+    const path = files[idx].path;
+    const key = file.name + '|' + file.size + '|' + file.lastModified;
 
-      /* Each file gets its own try/catch: one bad file must not stop the scan. */
-      try {
-        const cached = await idbGet<TrackRec>(ST_TRACKS, key);
-        let r: { rec: TrackRec; meta: ParsedMeta | null };
-        if (cached && cached.title) {
-          cached.path = path; /* path can change between picks */
-          r = { rec: cached, meta: null };
-        } else {
-          const parsed = await parseTrack(file, key, path);
-          await idbPut(ST_TRACKS, parsed.rec);
-          r = { rec: parsed.rec, meta: parsed.meta };
-        }
-        const t = recToTrack(r.rec, file);
-        S.tracks.push(t);
-        S.byPath[t.path] = t;
-        S.byUid[t.uid] = t;
-
-        /* Cover art, deduplicated per album: only the first track of an album
-           that actually carries a picture ever gets decoded. */
-        if (t.hasArt && !haveCover(t.coverKey) && !pendingCovers[t.coverKey]) {
-          pendingCovers[t.coverKey] = true;
-          const got = idbGet<CoverRec>(ST_COVERS, t.coverKey).then((row) => {
-            if (row && row.thumb) {
-              setCoverLocal(t.coverKey, row.thumb);
-              return null;
-            }
-            return r.meta ? artFromMeta(file, r.meta) : extractArt(file);
-          });
-          got
-            .then((blob) => {
-              if (!blob) return;
-              return storeCover(t.coverKey, blob);
-            })
-            .then(() => {
-              pendingCovers[t.coverKey] = false;
-              scheduleRender();
-            })
-            .catch((e: Error) => {
-              pendingCovers[t.coverKey] = false;
-              logErr('artwork', 'Could not read the cover in ' + file.name, e && e.message);
-            });
-        } else if (t.hasArt && !haveCover(t.coverKey)) {
-          void idbGet<CoverRec>(ST_COVERS, t.coverKey).then((row) => {
-            if (row && row.thumb && !haveCover(t.coverKey)) {
-              setCoverLocal(t.coverKey, row.thumb);
-              scheduleRender();
-            }
-          });
-        }
-      } catch (e) {
-        logErr('scan', 'Could not read ' + file.name, (e as Error) && (e as Error).message);
-        /* Still show the file, using whatever the path tells us. */
-        try {
-          const fb = fromPath(path, file.name);
-          const t2 = recToTrack(
-            {
-              key: key,
-              path: path,
-              title: fb.title || file.name,
-              artist: fb.artist || fb.album || 'Local Files',
-              albumArtist: fb.artist || 'Local Files',
-              album: fb.album || 'Singles',
-              track: fb.trackNo,
-              disc: 1,
-              year: '',
-              genre: '',
-              duration: 0,
-              fmt: extOf(file.name),
-              size: file.size,
-              added: file.lastModified,
-              hasArt: false,
-              coverKey: '',
-            },
-            file
-          );
-          t2.error = 'Tags could not be read';
-          S.tracks.push(t2);
-          S.byPath[t2.path] = t2;
-          S.byUid[t2.uid] = t2;
-        } catch (e2) {
-          logErr('scan', 'Skipped ' + file.name, (e2 as Error) && (e2 as Error).message);
-        }
+    /* Each file gets its own try/catch: one bad file must not stop the scan. */
+    try {
+      const cached = await idbGet<TrackRec>(ST_TRACKS, key);
+      let r: { rec: TrackRec; meta: ParsedMeta | null };
+      if (cached && cached.title) {
+        cached.path = path; /* path can change between picks */
+        r = { rec: cached, meta: null };
+      } else {
+        const parsed = await parseTrack(file, key, path);
+        await idbPut(ST_TRACKS, parsed.rec);
+        r = { rec: parsed.rec, meta: parsed.meta };
       }
+      const t = recToTrack(r.rec, folder.folderId, file);
+      S.tracks.push(t);
+      S.byRef[refOf(t.folderId, t.path)] = t;
+      if (!S.byPath[t.path]) S.byPath[t.path] = t;
+      S.byUid[t.uid] = t;
 
-      S.scanDone++;
-      updateScanChip();
-      /* Yield to the event loop every 8 files so the UI never blocks. */
-      if (S.scanDone % 8 === 0) {
-        rebuildIndex();
-        render();
-        await tick();
+      /* Cover art, deduplicated per album: only the first track of an album
+         that actually carries a picture ever gets decoded. */
+      if (t.hasArt && !haveCover(t.coverKey) && !pendingCovers[t.coverKey]) {
+        pendingCovers[t.coverKey] = true;
+        const got = idbGet<CoverRec>(ST_COVERS, t.coverKey).then((row) => {
+          if (row && row.thumb) {
+            setCoverLocal(t.coverKey, row.thumb);
+            return null;
+          }
+          return r.meta ? artFromMeta(file, r.meta) : extractArt(file);
+        });
+        got
+          .then((blob) => {
+            if (!blob) return;
+            return storeCover(t.coverKey, blob);
+          })
+          .then(() => {
+            pendingCovers[t.coverKey] = false;
+            scheduleRender();
+          })
+          .catch((e: Error) => {
+            pendingCovers[t.coverKey] = false;
+            logErr('artwork', 'Could not read the cover in ' + file.name, e && e.message);
+          });
+      } else if (t.hasArt && !haveCover(t.coverKey)) {
+        void idbGet<CoverRec>(ST_COVERS, t.coverKey).then((row) => {
+          if (row && row.thumb && !haveCover(t.coverKey)) {
+            setCoverLocal(t.coverKey, row.thumb);
+            scheduleRender();
+          }
+        });
+      }
+    } catch (e) {
+      logErr('scan', 'Could not read ' + file.name, (e as Error) && (e as Error).message);
+      /* Still show the file, using whatever the path tells us. */
+      try {
+        const fb = fromPath(path, file.name);
+        const t2 = recToTrack(
+          {
+            key: key,
+            path: path,
+            title: fb.title || file.name,
+            artist: fb.artist || fb.album || 'Local Files',
+            albumArtist: fb.artist || 'Local Files',
+            album: fb.album || 'Singles',
+            track: fb.trackNo,
+            disc: 1,
+            year: '',
+            genre: '',
+            duration: 0,
+            fmt: extOf(file.name),
+            size: file.size,
+            added: file.lastModified,
+            hasArt: false,
+            coverKey: '',
+          },
+          folder.folderId,
+          file
+        );
+        t2.error = 'Tags could not be read';
+        S.tracks.push(t2);
+        S.byUid[t2.uid] = t2;
+      } catch (e2) {
+        logErr('scan', 'Skipped ' + file.name, (e2 as Error) && (e2 as Error).message);
       }
     }
 
-    S.scanning = false;
-    rebuildIndex();
+    S.scanDone++;
     updateScanChip();
-    restoreLastTrack();
-    render();
-    backfillDurations();
-  } catch (e) {
-    S.scanning = false;
-    logErr('scan', 'The scan stopped early', (e as Error) && (e as Error).message);
-    rebuildIndex();
-    updateScanChip();
-    render();
+    /* Yield to the event loop every 8 files so the UI never blocks. */
+    if (S.scanDone % 8 === 0) {
+      reindexLibrary();
+      render();
+      await tick();
+    }
+  }
+
+  S.scanning = false;
+  reindexLibrary();
+  updateScanChip();
+  /* Legacy playlists (bare paths, no owner) adopt a real folder as soon as
+     their tracks resolve — the Phase 1 'local' data becomes folder-qualified
+     here and is persisted qualified. */
+  adoptLegacyPlaylists();
+  if (!restoredOnce) restoredOnce = restoreLastTrack();
+  render();
+  backfillDurations();
+
+  /* library.json is large and regenerable: written on scan-complete only. */
+  if (folder.capability === 'readwrite') {
+    const rows = S.tracks.filter((t) => t.folderId === folder.folderId);
+    queueSidecarWrite(folder, 'library.json', () => buildLibraryJson(folder.folderId, rows));
+    /* Playlist files replayed before this scan carried bare #EXTINF lines;
+       rewrite them now that their tracks resolve. */
+    reflushFolderPlaylists(folder.folderId);
   }
 }
 
@@ -400,11 +408,19 @@ export function backfillDurations(): void {
   step();
 }
 
+/** Clears the parse and cover caches, then re-scans every connected folder
+    in place. FSA folders re-enumerate from their handle; webkitdir folders
+    re-parse the files they still hold — no re-pick needed within a session. */
 export function rescanLibrary(): void {
+  const folders = connectedFolders();
+  if (!folders.length) {
+    toast('Add a music folder first');
+    return;
+  }
   toast('Clearing the cache and starting over');
   void Promise.all([idbClear(ST_TRACKS), idbClear(ST_COVERS)]).then(() => {
     releaseCovers();
     logErr('library', 'Cache cleared by Rescan library', 'playlists were kept');
-    pickFolder();
+    for (const f of folders) enqueueFolderScan(f);
   });
 }

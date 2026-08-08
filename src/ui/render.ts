@@ -1,14 +1,15 @@
 /* The render coordinator: which view is on screen, the #view event
    delegation, and the drag state shared with the sidebar drop targets. */
 
-import { S, savePrefs } from '../state';
+import { S, libraryTracks, savePrefs } from '../state';
 import { esc, toast, $, $$ } from '../util';
 import { renderNav, renderPlaylistNav } from './sidebar';
 import { viewHome, grid, albumTile, artistTile } from './albums';
 import { viewAlbum, viewArtist } from './album';
 import { viewSearch } from './search';
 import { viewPlaylist, movePlaylistRow, playlistById, playlistTracks, exportM3U, savePlaylist } from './playlists';
-import { songTable, sortTracks, clearSelection, setSelectionUI, handleRowSelect, actionPaths, setLastSelIndex } from './songs';
+import { songTable, sortTracks, clearSelection, setSelectionUI, handleRowSelect, actionEntries, setLastSelIndex } from './songs';
+import type { PlaylistEntry } from '../types';
 import { playList, toggleShuffle, syncPlayerUI } from './player';
 import { closeMenu, openRowMenu } from './menu';
 import { isMissingTrack } from '../state';
@@ -79,7 +80,7 @@ function renderMain(): void {
   } else if (base === 'songs') {
     crumb = 'Songs';
     h = S.tracks.length
-      ? songTable(sortTracks(S.tracks, S.sort.col, S.sort.dir), { context: 'songs', sortable: true })
+      ? songTable(sortTracks(libraryTracks(), S.sort.col, S.sort.dir), { context: 'songs', sortable: true })
       : emptyNote('No songs yet', 'Pick a folder that contains your album folders.');
   } else if (base === 'album') {
     crumb = 'Albums';
@@ -107,7 +108,7 @@ function renderMain(): void {
 
 export interface DragState {
   kind: 'tracks';
-  paths: string[];
+  entries: PlaylistEntry[];
   uids: string[];
   fromPlaylist: string;
   fromIndex: number;
@@ -278,14 +279,14 @@ export function wireLibrary(): void {
     const tbl = row.closest('.tbl');
     DRAG = {
       kind: 'tracks',
-      paths: actionPaths(uid),
+      entries: actionEntries(uid),
       uids: S.sel.slice(),
       fromPlaylist: (tbl && tbl.getAttribute('data-playlist')) || '',
       fromIndex: idx,
     };
     try {
       e.dataTransfer!.effectAllowed = 'copyMove';
-      e.dataTransfer!.setData('text/plain', DRAG.paths.join('\n'));
+      e.dataTransfer!.setData('text/plain', DRAG.entries.map((en) => en.path).join('\n'));
     } catch {
       /* some engines refuse dataTransfer here; the drag still works */
     }

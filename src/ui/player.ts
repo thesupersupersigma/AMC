@@ -2,7 +2,7 @@
    restore-last-track. */
 
 import type { AnyTrack, RowTrack, TrackRec } from '../types';
-import { S, PREFS, FULL, coverURL, isPlayableTrack, releaseFullArt, savePrefs } from '../state';
+import { S, PREFS, FULL, coverURL, isPlayableTrack, libraryTracks, refOf, releaseFullArt, savePrefs } from '../state';
 import { audio, createTrackURL, revokeCurrentURL } from '../audio/engine';
 import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
@@ -184,7 +184,7 @@ export function prev(): void {
 
 export function togglePlay(): void {
   if (!S.current) {
-    if (S.tracks.length) playList(S.tracks, 0);
+    if (S.tracks.length) playList(libraryTracks(), 0);
     return;
   }
   if (audio.paused)
@@ -513,10 +513,18 @@ export function wireAudio(): void {
 }
 
 /* ---------- restore the last session ---------- */
-export function restoreLastTrack(): void {
-  if (!PREFS.lastPath) return;
-  const t = S.byPath[PREFS.lastPath];
-  if (!t || !t.file) return;
+/** True once the remembered track was found and loaded; the scanner keeps
+    trying after each folder finishes until then — the track may live in a
+    folder that connects later in the boot sequence. */
+export function restoreLastTrack(): boolean {
+  if (!PREFS.lastRef && !PREFS.lastPath) return true; /* nothing to restore */
+  /* Folder-qualified ref first; the Phase 1 bare path still restores. */
+  const t = PREFS.lastRef
+    ? S.byRef[refOf(PREFS.lastRef.folderId, PREFS.lastRef.path)]
+    : PREFS.lastPath
+      ? S.byPath[PREFS.lastPath]
+      : undefined;
+  if (!t || !t.file) return false;
   const al = S.albumMap[t.coverKey];
   const list = al ? al.tracks : S.tracks;
   S.baseQueue = list.filter((x) => x.file);
@@ -533,4 +541,5 @@ export function restoreLastTrack(): void {
     logErr('playback', 'Could not reopen the last track', (e as Error) && (e as Error).message);
   }
   updateMediaSession(t);
+  return true;
 }

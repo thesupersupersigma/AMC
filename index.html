@@ -25,6 +25,7 @@
       <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
       Choose music folder
     </button>
+    <div id="savedFolders" hidden></div>
     <div class="fine">Press Ctrl&nbsp;+&nbsp;Shift&nbsp;+&nbsp;D at any time to open the activity log.</div>
   </div>
 </div>
@@ -39,6 +40,10 @@
     <div class="sect">Playlists</div>
     <div class="pl-scroll" id="plList"></div>
     <div class="sb-foot">
+      <button class="foot-btn" id="addFolderBtn" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg>
+        Add music folder
+      </button>
       <button class="foot-btn" id="rescanBtn" type="button">
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
         Rescan library
@@ -55,6 +60,7 @@
       <div id="crumb">Albums</div>
       <div class="spacer"></div>
       <div id="scanchip" hidden><span class="spinner"></span><span id="scanText">Scanning</span></div>
+      <button id="reconnectChip" type="button" hidden></button>
       <label class="searchbox">
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20.4 20.4l-3.9-3.9"/></svg>
         <input id="q" type="text" placeholder="Search your library" aria-label="Search your library by song, artist or album" autocomplete="off" spellcheck="false">

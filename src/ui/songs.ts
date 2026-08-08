@@ -1,6 +1,6 @@
 /* The song table, sorting, and row selection. */
 
-import type { AnyTrack, RowTrack, SortCol } from '../types';
+import type { AnyTrack, PlaylistEntry, RowTrack, SortCol } from '../types';
 import { S, isMissingTrack } from '../state';
 import { icon, artHTML } from './icons';
 import { esc, fmtDur, norm, $$ } from '../util';
@@ -27,7 +27,7 @@ function tableHead(sortable: boolean): string {
   );
 }
 
-function rowHTML(t: RowTrack, i: number): string {
+function rowHTML(t: RowTrack, i: number, opts: SongTableOpts): string {
   const missing = isMissingTrack(t);
   const isNow = !!(S.current && !missing && t.uid === S.current.uid);
   const selected = S.sel.indexOf(t.uid) >= 0;
@@ -38,17 +38,26 @@ function rowHTML(t: RowTrack, i: number): string {
     lead = '<div class="thumb">' + artHTML(t.coverKey) + '</div>';
   }
   let note = '';
-  if (missing) note = '<div class="t-note">Not in this folder</div>';
+  if (missing) note = '<div class="t-note">' + esc(t.note || 'Not in this folder') + '</div>';
   else if (t.error) note = '<div class="t-note">' + esc(t.error) + '</div>';
+  else if (opts.noteFor) {
+    const extra = opts.noteFor(t, i);
+    if (extra) note = '<div class="t-note">' + esc(extra) + '</div>';
+  }
 
   const warn = !missing && t.error ? '<span class="warn" title="' + esc(t.error) + '">' + icon('warn') + '</span>' : '';
+  /* The duplicate badge: this row stands for n copies; the row menu picks
+     which one plays. */
+  const dup = !missing && t.dupRefs && t.dupRefs.length
+    ? '<span class="dup-badge" title="' + (t.dupRefs.length + 1) + ' copies across folders">' + (t.dupRefs.length + 1) + '×</span>'
+    : '';
 
   return (
     '<div class="tr row' + (isNow ? ' playing' : '') + (selected ? ' sel' : '') + (missing ? ' dim' : '') + '"' +
     ' data-uid="' + esc(t.uid) + '" data-i="' + i + '" draggable="true" tabindex="0" role="button"' +
     ' aria-label="' + esc(t.title + ' by ' + t.artist) + '">' +
     '<div class="c-song">' + lead +
-    '<div class="t-lines"><div class="t-title trunc">' + warn + esc(t.title) + '</div>' + note + '</div>' +
+    '<div class="t-lines"><div class="t-title trunc">' + warn + esc(t.title) + dup + '</div>' + note + '</div>' +
     '</div>' +
     '<div class="c-dim trunc">' + esc(t.artist) + '</div>' +
     '<div class="c-dim trunc">' + esc(t.album) + '</div>' +
@@ -63,6 +72,8 @@ export interface SongTableOpts {
   playlistId?: string;
   reorder?: boolean;
   sortable?: boolean;
+  /** Extra per-row note (e.g. "from 'Backup'") when the row has no error. */
+  noteFor?: (t: RowTrack, i: number) => string;
 }
 
 export function songTable(tracks: RowTrack[], opts?: SongTableOpts): string {
@@ -73,7 +84,7 @@ export function songTable(tracks: RowTrack[], opts?: SongTableOpts): string {
     (opts.playlistId ? ' data-playlist="' + esc(opts.playlistId) + '"' : '') +
     (opts.reorder ? ' data-reorder="1"' : '') + '>';
   h += tableHead(!!opts.sortable);
-  for (let i = 0; i < tracks.length; i++) h += rowHTML(tracks[i], i);
+  for (let i = 0; i < tracks.length; i++) h += rowHTML(tracks[i], i, opts);
   h += '</div>';
   return h;
 }
@@ -139,14 +150,15 @@ export function handleRowSelect(uid: string, index: number, ev: MouseEvent): voi
   setSelectionUI();
 }
 
-/* Paths for whatever the user is acting on: the selection if the clicked row
-   is part of it, otherwise just that row. */
-export function actionPaths(uid: string): string[] {
+/* Entries for whatever the user is acting on: the selection if the clicked
+   row is part of it, otherwise just that row. Ghost rows keep an empty
+   folderId — they resolve again when their folder loads. */
+export function actionEntries(uid: string): PlaylistEntry[] {
   const uids = S.sel.length > 1 && S.sel.indexOf(uid) >= 0 ? S.sel.slice() : [uid];
-  const out: string[] = [];
+  const out: PlaylistEntry[] = [];
   uids.forEach((u) => {
     const t = S.byUid[u];
-    if (t) out.push(t.path);
+    if (t) out.push({ folderId: isMissingTrack(t) ? '' : t.folderId, path: t.path });
   });
   return out;
 }

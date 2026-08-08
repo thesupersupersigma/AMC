@@ -12,8 +12,8 @@ import { audio, revokeCurrentURL } from './audio/engine';
 import { releaseCovers } from './state';
 import { idbOpen } from './db/idb';
 import { $, isTyping } from './util';
-import { pickFolder } from './fs/webkitdir';
-import { onFilesPicked, rescanLibrary } from './scan/scanner';
+import { addFolderViaPicker, addWebkitFolder, restoreFoldersOnBoot, wireFolderUI } from './fs/folders';
+import { rescanLibrary } from './scan/scanner';
 import { importM3U, loadPlaylists } from './ui/playlists';
 import { navTo, wireLibrary } from './ui/render';
 import { renderPlaylistNav, wireSidebar } from './ui/sidebar';
@@ -159,16 +159,19 @@ function wireServiceWorkerUpdates(): void {
 /* =========================================================================
    Boot
    ========================================================================= */
-function boot(): void {
-  seedStateFromPrefs();
+async function boot(): Promise<void> {
+  /* The database first: prefs and the folder registry live there now. */
+  await idbOpen();
+  await seedStateFromPrefs();
   audio.volume = S.volume;
   audio.muted = S.muted;
 
-  $('#pickBtn').addEventListener('click', pickFolder);
+  $('#pickBtn').addEventListener('click', addFolderViaPicker);
+  $('#addFolderBtn').addEventListener('click', addFolderViaPicker);
   $('#rescanBtn').addEventListener('click', rescanLibrary);
   $<HTMLInputElement>('#picker').addEventListener('change', (e) => {
     const files = (e.target as HTMLInputElement).files;
-    if (files && files.length) onFilesPicked(files);
+    if (files && files.length) void addWebkitFolder(files);
   });
   $<HTMLInputElement>('#m3upicker').addEventListener('change', (e) => {
     const f = (e.target as HTMLInputElement).files && (e.target as HTMLInputElement).files![0];
@@ -188,6 +191,7 @@ function boot(): void {
   wireMediaSession();
   wireSearch();
   wireMenus();
+  wireFolderUI();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();
@@ -205,14 +209,17 @@ function boot(): void {
     releaseCovers();
   });
 
-  idbOpen()
-    .then(loadPlaylists)
-    .then(() => {
-      renderPlaylistNav();
-    })
-    .catch((e: Error) => {
-      logErr('startup', 'Could not load saved playlists', e && e.message);
-    });
+  try {
+    await loadPlaylists();
+    renderPlaylistNav();
+  } catch (e) {
+    logErr('startup', 'Could not load saved playlists', (e as Error) && (e as Error).message);
+  }
+  /* Reopen granted folders without a prompt; anything else renders as a
+     one-click Reconnect (FSA) or a pick-again row (webkitdir). */
+  await restoreFoldersOnBoot();
 }
 
-boot();
+void boot().catch((e: Error) => {
+  logErr('startup', 'Boot failed', e && (e.stack || e.message));
+});

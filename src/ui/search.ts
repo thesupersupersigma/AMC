@@ -1,6 +1,6 @@
 /* The search view and the search box wiring. */
 
-import { S } from '../state';
+import { S, libraryTracks } from '../state';
 import { norm, plural, $ } from '../util';
 import { emptyNote, render, viewBase } from './render';
 import { grid, albumTile, artistTile } from './albums';
@@ -9,7 +9,7 @@ import { songTable, matches, clearSelection } from './songs';
 export function viewSearch(): string {
   const q = norm(S.q);
   if (!q) return emptyNote('Search your library', 'Start typing to filter by song, artist or album. Results update as you type.');
-  const songs = S.tracks.filter((t) => matches(t, q));
+  const songs = libraryTracks().filter((t) => matches(t, q));
   const albums = S.albums.filter((a) => norm(a.album).indexOf(q) >= 0 || norm(a.artist).indexOf(q) >= 0);
   const artists = S.artists.filter((a) => norm(a.name).indexOf(q) >= 0);
   if (!songs.length && !albums.length && !artists.length) {

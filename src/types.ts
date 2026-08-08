@@ -33,6 +33,10 @@ export interface Track {
   file?: File;
   /** Set when parsing or playback failed; rendered as a warning on the row. */
   error?: string;
+  /** Duplicate merge (Phase 2): a shadowed copy is hidden from the library
+      views but stays fully reachable; the primary row carries the refs. */
+  shadowed?: boolean;
+  dupRefs?: string[];
 }
 
 /** A track carved out of a longer file by a cue sheet. */
@@ -60,6 +64,9 @@ export interface MissingTrack {
   duration: number;
   coverKey: string;
   error: string;
+  /** Overrides the default "Not in this folder" row note — e.g. a
+      cross-folder entry whose folder is not loaded. */
+  note?: string;
 }
 
 /** Anything a song table can render. Playback accepts only AnyTrack. */
@@ -82,14 +89,28 @@ export interface Artist {
   tracks: AnyTrack[];
 }
 
+/** One playlist row: folderId + path, never cacheKey — re-tagging a file
+    changes lastModified and would empty every playlist. An empty folderId
+    marks a legacy (pre-multi-folder) entry not yet resolved to a folder. */
+export interface PlaylistEntry {
+  folderId: string;
+  path: string;
+}
+
 export interface Playlist {
   id: string;
   name: string;
-  /** Membership keys on path, never on cacheKey: re-tagging a file changes
-      lastModified and would empty every playlist. */
-  paths: string[];
+  /** The folder whose .AMC/playlists/ holds this list. Empty until a legacy
+      playlist has been adopted by a real folder. */
+  ownerFolderId: string;
+  entries: PlaylistEntry[];
   created: number;
   updated: number;
+  /** Set while the sidecar copy is behind IndexedDB (the write journal). */
+  dirty?: boolean;
+  /** Current file name inside .AMC/playlists/, tracked so renames replace
+      the old file instead of orphaning it. */
+  fileName?: string;
 }
 
 export interface CueTrack {
@@ -155,10 +176,82 @@ export interface PeakData {
   pairs: number[];
 }
 
-/** One interface over the two folder-access backends. */
+/** One interface over the two folder-access backends. Paths given to and
+    returned from a backend are library paths: `<root name>/<relative>`. */
 export interface FsBackend {
   kind: 'fsa' | 'webkitdir';
   capability: Capability;
+  label: string;
+  /** Every audio file under the root, sorted by path. */
+  listAudioFiles(): Promise<{ path: string; file: File }[]>;
+  /** Text of a file inside .AMC/, or null when absent or unreadable. */
+  readSidecarText(relPath: string): Promise<string | null>;
+  /** Names of files inside a .AMC/ subdirectory ('' for .AMC itself). */
+  listSidecarDir(relPath: string): Promise<string[]>;
+  /** Writes inside .AMC/ only; must throw on failure — a failed write is
+      never treated as success. Read-only backends always throw. */
+  writeSidecarText(relPath: string, text: string): Promise<void>;
+  /** Removes a file inside .AMC/; missing files are not an error. */
+  removeSidecarFile(relPath: string): Promise<void>;
+  /** Creates .AMC/ and its subdirectories. No-op on read-only backends. */
+  ensureSidecarLayout(): Promise<void>;
+}
+
+/** A music folder the app is (or was) connected to. */
+export interface ConnectedFolder {
+  folderId: string;
+  label: string;
+  order: number;
+  capability: Capability;
+  backend: FsBackend;
+}
+
+/* ---------- storage shapes (Phase 2) ---------- */
+
+/** Persisted folder registration. FSA rows carry the directory handle
+    (structured-cloneable); webkitdir rows carry metadata only, because that
+    backend is session-scoped by design. */
+export interface FolderRec {
+  folderId: string;
+  label: string;
+  order: number;
+  kind: 'fsa' | 'webkitdir';
+  handle?: FileSystemDirectoryHandle;
+  addedAt: number;
+}
+
+/** .AMC/settings.json. schemaVersion exists from the very first write so
+    Phase 5's migration machinery has something to migrate from. */
+export interface SidecarSettings {
+  schemaVersion: number;
+  folderId: string;
+  label: string;
+  createdAt: number;
+  /** Convenience copy of the global app preferences, mirrored into the
+      first folder's sidecar only. IndexedDB stays canonical. */
+  appPrefs?: Prefs;
+}
+
+export interface SidecarLibrary {
+  schemaVersion: number;
+  folderId: string;
+  generatedAt: number;
+  tracks: Array<{
+    path: string; // folder-relative, no root segment
+    title: string;
+    artist: string;
+    albumArtist: string;
+    album: string;
+    track: number;
+    disc: number;
+    year: number;
+    genre: string;
+    duration: number;
+    fmt: string;
+    size: number;
+    added: number;
+    hasArt: boolean;
+  }>;
 }
 
 /* ---------- storage shapes ---------- */
@@ -185,12 +278,27 @@ export interface TrackRec {
   coverKey: string;
 }
 
+/** IDB playlist row. Legacy rows (v1 / Phase 1) have `paths`; current rows
+    have `ownerFolderId` + `entries`. loadPlaylists upgrades in place. */
 export interface PlaylistRec {
   id: string;
   name: string;
-  paths: string[];
+  paths?: string[];
+  ownerFolderId?: string;
+  entries?: PlaylistEntry[];
   created: number;
   updated: number;
+  dirty?: number;
+  fileName?: string;
+}
+
+/** IDB meta row (key 'app'): global prefs + the stored-data schema version.
+    schemaVersion 2 = real folderIds everywhere; nothing ever persists the
+    Phase 1 'local' placeholder. */
+export interface MetaRec {
+  key: 'app';
+  schemaVersion: number;
+  prefs?: Prefs;
 }
 
 export interface CoverRec {
@@ -204,7 +312,10 @@ export interface Prefs {
   shuffle?: boolean;
   repeat?: string;
   view?: string;
+  /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
+  /** Folder-qualified successor of lastPath. */
+  lastRef?: { folderId: string; path: string };
   lastPos?: number;
   sort?: { col: string; dir: number };
 }

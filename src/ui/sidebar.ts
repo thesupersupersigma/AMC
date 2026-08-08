@@ -6,7 +6,7 @@ import { icon } from './icons';
 import { esc, toast, $ } from '../util';
 import { logErr } from './log';
 import { navTo, render, viewArg, viewBase, getDrag, clearDrag, clearDropMarks } from './render';
-import { plEdit, createPlaylist, deletePlaylist, playlistById, playlistMosaicHTML, savePlaylist, addPathsToPlaylist, importM3U } from './playlists';
+import { plEdit, createPlaylist, deletePlaylist, playlistById, playlistMosaicHTML, savePlaylist, addEntriesToPlaylist, importM3U } from './playlists';
 import { openPlaylistMenu } from './menu';
 
 const NAV = [
@@ -193,7 +193,7 @@ export function wireSidebar(): void {
     if (drag && item) {
       e.preventDefault();
       clearDropMarks();
-      void addPathsToPlaylist(item.getAttribute('data-plrow') || '', drag.paths);
+      void addEntriesToPlaylist(item.getAttribute('data-plrow') || '', drag.entries);
       clearDrag();
       return;
     }
