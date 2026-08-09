@@ -15,6 +15,7 @@ const NAV = [
   { id: 'albums', label: 'Albums', icon: 'albums' },
   { id: 'artists', label: 'Artists', icon: 'artists' },
   { id: 'songs', label: 'Songs', icon: 'songs' },
+  { id: 'recent', label: 'Recently added', icon: 'clock' },
 ];
 
 export function renderNav(): void {

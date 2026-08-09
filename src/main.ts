@@ -35,6 +35,7 @@ import { openAiRepair, wireRepair } from './ui/repair';
 import { wireLyrics } from './ui/lyrics';
 import { wireSettings } from './ui/settings';
 import { wireNowPlaying } from './ui/nowplaying';
+import { wirePip } from './ui/pip';
 
 /* =========================================================================
    Keyboard
@@ -207,6 +208,7 @@ async function boot(): Promise<void> {
   wireLyrics();
   wireSettings();
   wireNowPlaying();
+  wirePip();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();

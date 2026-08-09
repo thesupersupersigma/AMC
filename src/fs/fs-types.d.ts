@@ -1,6 +1,10 @@
 /* Ambient declarations for File System Access surface that lib.dom does not
    ship: the picker, the permission calls, and async directory iteration. */
 
+/** Injected by Vite define: package.json version, overridden by the release
+    tag (AMC_VERSION) so shipped builds label themselves correctly. */
+declare const __AMC_VERSION__: string;
+
 interface DirectoryPickerOptions {
   id?: string;
   mode?: 'read' | 'readwrite';

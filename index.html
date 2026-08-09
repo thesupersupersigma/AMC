@@ -105,6 +105,7 @@
     </div>
   </div>
   <div class="pb-right">
+    <button class="pb-btn" id="btnPip" type="button" title="Open the mini player" aria-label="Open the floating mini player"></button>
     <button class="pb-btn" id="btnLyrics" type="button" title="Show lyrics" aria-label="Show lyrics"></button>
     <button class="pb-btn" id="btnQueue" type="button" title="Show what plays next" aria-label="Show what plays next"></button>
     <div class="volwrap">
@@ -173,6 +174,14 @@
     <button class="pill-play" id="splitSave" type="button">Save track breaks</button>
   </footer>
 </div>
+
+<div id="albumselbar" hidden>
+  <span id="albumselText"></span>
+  <button class="pill-play" id="albumselShuffle" type="button">Shuffle selected</button>
+  <button class="pill-ghost" id="albumselClear" type="button">Clear</button>
+</div>
+
+<button id="resumechip" type="button" hidden></button>
 
 <div id="toast" role="status" aria-live="polite"></div>
 

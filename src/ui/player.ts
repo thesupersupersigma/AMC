@@ -4,10 +4,10 @@
 import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
 import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
 import { audio, cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
+import { ST_META, ST_TRACKS, idbDel, idbGet, idbPut } from '../db/idb';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';
 import { lyricsTrackChanged } from './lyrics';
 import { nowPlayingTrackChanged } from './nowplaying';
-import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
 import { icon, solid, artHTML } from './icons';
 import { clamp, fmtTime, plural, toast, $ } from '../util';
@@ -169,6 +169,7 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
   void waveformTrackChanged();
   lyricsTrackChanged();
   nowPlayingTrackChanged();
+  offerResume(t);
   startBoundaryLoop();
 }
 
@@ -192,6 +193,75 @@ function boundaryTick(): void {
   checkCrossfadeAdvance(c);
   if (c.kind === 'virtual') checkCueBoundary(c);
   boundaryRaf = requestAnimationFrame(boundaryTick);
+}
+
+/* ---------- per-track resume (Phase 6) --------------------------------
+   Long files — unsplit vinyl sides above ~10 minutes — remember where they
+   stopped. The position rides in small IDB meta rows keyed by track ref;
+   reopening such a track offers "Resume from 31:08" on a transient chip,
+   never a blocking dialog. Finishing a track clears its row. ---------- */
+
+const RESUME_MIN_DURATION = 600;
+const RESUME_MIN_SEC = 30;
+
+interface ResumeRec {
+  key: string;
+  sec: number;
+  at: number;
+}
+
+function resumeKeyOf(t: AnyTrack): string {
+  return 'resume:' + refOf(t.folderId, t.path);
+}
+
+let lastResumeSave = 0;
+function maybeSaveResume(): void {
+  const c = S.current;
+  if (!c || c.kind !== 'file' || audio.paused) return;
+  if (!((c.duration || 0) > RESUME_MIN_DURATION)) return;
+  const now = performance.now();
+  if (now - lastResumeSave < 5000) return;
+  lastResumeSave = now;
+  const sec = Math.floor(audio.currentTime || 0);
+  if (sec > (c.duration || 0) - 20) {
+    c.resumeSec = 0;
+    void idbDel(ST_META, resumeKeyOf(c));
+    return;
+  }
+  if (sec < RESUME_MIN_SEC) return;
+  c.resumeSec = sec;
+  void idbPut(ST_META, { key: resumeKeyOf(c), sec: sec, at: Date.now() } as ResumeRec);
+}
+
+let resumeChipTimer: ReturnType<typeof setTimeout> | null = null;
+function hideResumeChip(): void {
+  const chip = $('#resumechip');
+  if (chip) chip.hidden = true;
+  if (resumeChipTimer) clearTimeout(resumeChipTimer);
+  resumeChipTimer = null;
+}
+
+function offerResume(t: AnyTrack): void {
+  hideResumeChip();
+  if (t.kind !== 'file' || !((t.duration || 0) > RESUME_MIN_DURATION)) return;
+  void idbGet<ResumeRec>(ST_META, resumeKeyOf(t)).then((row) => {
+    if (!row || !(row.sec >= RESUME_MIN_SEC)) return;
+    if (S.current !== t) return; /* moved on while reading */
+    if (row.sec > (t.duration || 0) - 30) return;
+    const chip = $('#resumechip');
+    if (!chip) return;
+    chip.textContent = 'Resume from ' + fmtTime(row.sec);
+    chip.hidden = false;
+    chip.onclick = (): void => {
+      try {
+        audio.currentTime = row.sec;
+      } catch {
+        pendingSeek = row.sec;
+      }
+      hideResumeChip();
+    };
+    resumeChipTimer = setTimeout(hideResumeChip, 12000);
+  });
 }
 
 /* A crossfade must START before the track ends — once 'ended' fires there
@@ -614,6 +684,12 @@ export function wireAudio(): void {
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   });
   audio.addEventListener('ended', () => {
+    /* A finished long file starts from the top next time. */
+    const fin = S.current;
+    if (fin && fin.kind === 'file' && (fin.duration || 0) > RESUME_MIN_DURATION) {
+      fin.resumeSec = 0;
+      void idbDel(ST_META, resumeKeyOf(fin));
+    }
     /* A track restored from the last session is loaded but deliberately
        paused. If it is a broken file it can fire 'ended' on load, and
        advancing there would start playing something nobody asked for. */
@@ -641,6 +717,7 @@ export function wireAudio(): void {
        crossfade window — working there. */
     if (S.current && !audio.paused) checkCrossfadeAdvance(S.current);
     if (S.current && S.current.kind === 'virtual' && !audio.paused) checkCueBoundary(S.current);
+    maybeSaveResume();
     /* Only real elapsed playback clears the failure streak — and proves the
        codec, withdrawing any earlier session verdict against its fourcc.
        "Real" requires decoded bytes where the browser exposes the counter:

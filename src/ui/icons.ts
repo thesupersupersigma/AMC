@@ -32,6 +32,8 @@ const ICONS: Record<string, string> = {
   folder:   '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
   playnext: '<path d="M3 6.5h11"/><path d="M3 12h8"/><path d="M3 17.5h8"/><path d="M15 9.4l6 3.4-6 3.4z"/>',
   lyrics:   '<path d="M4 4.5h16a1 1 0 011 1v9.5a1 1 0 01-1 1h-7.6L8 20v-4H4a1 1 0 01-1-1V5.5a1 1 0 011-1z"/><path d="M7 8.5h10"/><path d="M7 11.8h6.5"/>',
+  clock:    '<circle cx="12" cy="12" r="8.6"/><path d="M12 7.2V12l3.4 2.2"/>',
+  pip:      '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="11.5" y="11.5" width="7" height="5.5" rx="1" fill="currentColor" stroke="none"/>',
   minus:    '<path d="M5 12h14"/>',
   sortup:   '<path d="M6 14l6-6 6 6"/>',
   sortdown: '<path d="M6 10l6 6 6-6"/>',

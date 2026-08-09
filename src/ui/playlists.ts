@@ -25,6 +25,7 @@ import {
   queueSidecarWrite,
 } from '../fs/amcdir';
 import { connectedFolders, firstWritableFolder, folderById, folderLabel } from '../fs/folders';
+import { canUseFsa } from '../fs/adapter';
 
 /* Sidebar editing state: the new-playlist input, an in-place rename, and the
    inline delete confirmation. Owned here, rendered by sidebar.ts. */
@@ -284,6 +285,7 @@ export function viewPlaylist(id: string): string {
     '<button class="pill-play" type="button" data-playplaylist="' + esc(pl.id) + '">' + solid('play') + 'Play</button>' +
     '<button class="pill-ghost" type="button" data-shuffleplaylist="' + esc(pl.id) + '">' + icon('shuffle') + 'Shuffle</button>' +
     '<button class="pill-ghost" type="button" data-export="' + esc(pl.id) + '">' + icon('download') + 'Export M3U</button>' +
+    (canUseFsa() ? '<button class="pill-ghost" type="button" data-exportfiles="' + esc(pl.id) + '" title="Copy the audio files themselves into a folder, numbered in playlist order">' + icon('folder') + 'Export files…</button>' : '') +
     '</div>' +
     '</div>' +
     '</div>';
@@ -308,6 +310,61 @@ export function viewPlaylist(id: string): string {
 function relPath(p: string): string {
   const i = String(p).indexOf('/');
   return i >= 0 ? String(p).slice(i + 1) : String(p); /* relative to the library root */
+}
+
+/** Phase 6: copy the playlist's actual audio into a chosen folder,
+    numbered in playlist order — a real portable copy, unlike the M3U,
+    which only writes a list of paths. Cue-carved tracks are skipped with a
+    note: their audio lives inside a shared rip and copying it once per
+    track would duplicate the whole side. */
+export async function exportPlaylistFiles(id: string): Promise<void> {
+  const pl = playlistById(id);
+  if (!pl) return;
+  if (!canUseFsa()) {
+    toast('Copying files needs Chrome with folder access');
+    return;
+  }
+  let dest: FileSystemDirectoryHandle;
+  try {
+    dest = await window.showDirectoryPicker!({ mode: 'readwrite', id: 'amc-export' });
+  } catch (e) {
+    if ((e as DOMException).name !== 'AbortError') logErr('playlists', 'The destination picker failed', (e as Error).message);
+    return;
+  }
+  const rows = playlistTracks(pl);
+  let pos = 0;
+  let copied = 0;
+  let skippedVirtual = 0;
+  let failed = 0;
+  for (const t of rows) {
+    pos++;
+    if (isMissingTrack(t) || !t.file) {
+      failed++;
+      continue;
+    }
+    if (t.kind === 'virtual') {
+      skippedVirtual++;
+      continue;
+    }
+    const name =
+      (String(pos).padStart(2, '0') + ' - ' + (t.artist || 'Unknown') + ' - ' + (t.title || 'Track')).replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) +
+      '.' + (t.fmt || 'bin');
+    try {
+      const fh = await dest.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(t.file);
+      await w.close();
+      copied++;
+      if (copied % 3 === 0) toast('Copying… ' + copied + ' of ' + rows.length);
+    } catch (e) {
+      failed++;
+      logErr('playlists', 'Could not copy ' + name, (e as Error).message);
+    }
+  }
+  const bits = [plural(copied, 'file copied', 'files copied')];
+  if (skippedVirtual) bits.push(skippedVirtual + ' cue track' + (skippedVirtual === 1 ? '' : 's') + ' skipped (they live inside a shared rip)');
+  if (failed) bits.push(failed + ' failed — see the activity log');
+  toast(bits.join(' · '));
 }
 
 export function exportM3U(id: string): void {

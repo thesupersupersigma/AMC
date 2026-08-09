@@ -454,6 +454,15 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
   const cueFiles = listed.filter((f) => extOf(f.path) === 'cue');
   /* Sibling .lrc files are a lyrics source, never library rows. */
   registerSiblingLrcs(folder.folderId, listed.filter((f) => extOf(f.path) === 'lrc'));
+  /* Snapshot before replacing, so the scan can say what it changed —
+     "4 tracks added, 1 removed, 2 re-tagged" instead of the library
+     silently changing shape. cacheKey embeds name|size|mtime, so a
+     re-tagged file shows as changed even at the same path. */
+  const prevRows = new Map<string, string>();
+  for (const t of S.tracks) {
+    if (t.folderId === folder.folderId && t.kind === 'file') prevRows.set(t.path, t.cacheKey);
+  }
+  const hadPrev = prevRows.size > 0;
   /* Replace only this folder's rows; other folders keep playing. */
   S.tracks = S.tracks.filter((t) => t.folderId !== folder.folderId);
 
@@ -608,6 +617,33 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
   /* Legacy playlists (bare paths, no owner) adopt a real folder as soon as
      their tracks resolve — the Phase 1 'local' data becomes folder-qualified
      here and is persisted qualified. */
+  /* The rescan diff. Log always; toast only when there was a previous
+     state to differ from (a first scan would just shout "everything added"). */
+  {
+    let added = 0;
+    let retagged = 0;
+    const seen = new Set<string>();
+    for (const t of scanned) {
+      seen.add(t.path);
+      const prev = prevRows.get(t.path);
+      if (prev === undefined) added++;
+      else if (prev !== t.cacheKey) retagged++;
+    }
+    let removed = 0;
+    prevRows.forEach((_key, path) => {
+      if (!seen.has(path)) removed++;
+    });
+    if (added || removed || retagged) {
+      const parts: string[] = [];
+      if (added) parts.push(added + ' added');
+      if (removed) parts.push(removed + ' removed');
+      if (retagged) parts.push(retagged + ' re-tagged');
+      const summary = parts.join(', ');
+      logErr('scan', "Rescan of '" + folder.label + "': " + summary, '');
+      if (hadPrev) toast(folder.label + ': ' + summary);
+    }
+  }
+
   adoptLegacyPlaylists();
   if (!restoredOnce) restoredOnce = restoreLastTrack();
   render();

@@ -103,7 +103,7 @@ export function viewSettings(): string {
       '</div>';
   }
 
-  h += '<div class="set-sect"><p class="set-hint">Schema v' + SCHEMA_VERSION + ' · AMC v2</p>' +
+  h += '<div class="set-sect"><p class="set-hint">AMC v' + esc(__AMC_VERSION__) + ' · Schema v' + SCHEMA_VERSION + '</p>' +
     '<p class="set-hint">AMC is not affiliated with, endorsed by, or connected to Apple Inc. Apple Music is a trademark of Apple Inc.</p>' +
     '<p class="set-hint">Made by <a href="https://github.com/thesupersupersigma" target="_blank" rel="noopener">thesupersupersigma</a> and Claude Fable 5</p>' +
     '</div>';

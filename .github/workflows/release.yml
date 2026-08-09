@@ -1,9 +1,10 @@
-# Release build: on a tag push, build both distributions and attach them.
+# Release build: on a tag push, verify the tag against package.json, build
+# both distributions with the version injected, and attach them.
 #
-# - amc-dist.zip     — the full PWA build. Must be SERVED (any static host or
-#                      `npx serve dist`); double-clicking its index.html gives
-#                      the degraded file:// mode with no service worker.
-# - AMC.html         — the single-file build. Opens directly from disk.
+# - amc-dist-v<V>.zip — the full PWA build. Must be SERVED (any static host
+#                       or `npx serve dist`); double-clicking its index.html
+#                       gives the degraded file:// mode, no service worker.
+# - AMC-v<V>.html     — the single-file build. Opens directly from disk.
 
 name: release
 
@@ -29,6 +30,17 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Verify the tag matches package.json
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}. Bump package.json (or retag) so the release is not mislabelled."
+            exit 1
+          fi
+          echo "AMC_VERSION=$PKG_VERSION" >> "$GITHUB_ENV"
+          echo "Releasing AMC v$PKG_VERSION"
+
       - name: Typecheck
         run: npx tsc --noEmit
 
@@ -40,16 +52,16 @@ jobs:
 
       - name: Package
         run: |
-          cd dist && zip -r ../amc-dist.zip . && cd ..
-          cp dist-file/index.html AMC.html
+          cd dist && zip -r "../amc-dist-v${AMC_VERSION}.zip" . && cd ..
+          cp dist-file/index.html "AMC-v${AMC_VERSION}.html"
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            amc-dist.zip
-            AMC.html
+            amc-dist-v*.zip
+            AMC-v*.html
           body: |
-            **amc-dist.zip** — the full PWA build. Serve it (`npx serve dist` or any static host); it installs offline and carries the /api proxies when deployed to Vercel. Double-clicking its index.html is not supported.
+            **amc-dist-v*.zip** — the full PWA build. Serve it (`npx serve dist` or any static host); it installs offline and carries the /api proxies when deployed to Vercel. Double-clicking its index.html is not supported.
 
-            **AMC.html** — the single-file build. Opens directly from disk with no server. Folder access is read-only there and catalog/lyrics lookups go through music.thesupersupersigma.com while online.
+            **AMC-v*.html** — the single-file build. Opens directly from disk with no server. Folder access is read-only there and catalog/lyrics lookups go through music.thesupersupersigma.com while online.

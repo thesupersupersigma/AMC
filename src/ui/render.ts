@@ -2,12 +2,13 @@
    delegation, and the drag state shared with the sidebar drop targets. */
 
 import { S, libraryTracks, savePrefs } from '../state';
-import { esc, toast, $, $$ } from '../util';
+import { esc, plural, toast, $, $$ } from '../util';
+import { icon } from './icons';
 import { renderNav, renderPlaylistNav } from './sidebar';
 import { viewHome, grid, albumTile, artistTile } from './albums';
 import { viewAlbum, viewArtist } from './album';
 import { viewSearch } from './search';
-import { viewPlaylist, movePlaylistRow, playlistById, playlistTracks, exportM3U, savePlaylist } from './playlists';
+import { viewPlaylist, movePlaylistRow, playlistById, playlistTracks, exportM3U, exportPlaylistFiles, savePlaylist } from './playlists';
 import { songTable, sortTracks, clearSelection, setSelectionUI, handleRowSelect, actionEntries, setLastSelIndex } from './songs';
 import type { PlaylistEntry } from '../types';
 import { playList, toggleShuffle, syncPlayerUI } from './player';
@@ -38,9 +39,46 @@ export function viewArg(): string {
 export function navTo(v: string): void {
   S.view = v;
   clearSelection();
+  clearAlbumSelection();
   closeMenu();
   savePrefs();
   render();
+}
+
+/* ---------- album multi-select (Phase 6 album shuffle) ----------
+   Ctrl/Cmd-click gathers albums; the floating bar pools EVERY track from
+   the selection and shuffles across the whole pool — album boundaries
+   disappear entirely, never album-at-a-time. */
+
+const selAlbums = new Set<string>();
+
+function syncAlbumSelBar(): void {
+  const bar = $('#albumselbar');
+  if (!bar) return;
+  if (!selAlbums.size) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const label = $('#albumselText');
+  if (label) label.textContent = plural(selAlbums.size, 'album selected', 'albums selected');
+}
+
+export function clearAlbumSelection(): void {
+  if (!selAlbums.size) return;
+  selAlbums.clear();
+  $$('.tile.selected').forEach((t) => t.classList.remove('selected'));
+  syncAlbumSelBar();
+}
+
+function shufflePool(pool: ReturnType<typeof libraryTracks>): void {
+  const playable = pool.filter((t) => !!t.file);
+  if (!playable.length) {
+    toast('Nothing playable in that selection');
+    return;
+  }
+  if (!S.shuffle) toggleShuffle();
+  playList(playable, Math.floor(Math.random() * playable.length));
 }
 
 export function render(): void {
@@ -75,7 +113,12 @@ function renderMain(): void {
     h = viewHome();
   } else if (base === 'albums') {
     crumb = 'Albums';
-    h = S.albums.length ? grid(S.albums, albumTile) : emptyNote('No albums yet', 'Songs appear here as soon as the scan reaches them.');
+    h = S.albums.length
+      ? '<div class="section-head"><h2>Albums</h2><span class="sub">' +
+        plural(S.albums.length, 'album', 'albums') +
+        ' · Ctrl-click to select several</span><button type="button" class="pill-ghost set-small" data-shuffleall>' + icon('shuffle') + 'Shuffle all</button></div>' +
+        grid(S.albums, albumTile)
+      : emptyNote('No albums yet', 'Songs appear here as soon as the scan reaches them.');
   } else if (base === 'artists') {
     crumb = 'Artists';
     h = S.artists.length ? grid(S.artists, artistTile) : emptyNote('No artists yet', 'Songs appear here as soon as the scan reaches them.');
@@ -96,6 +139,14 @@ function renderMain(): void {
   } else if (base === 'playlist') {
     crumb = 'Playlists';
     h = viewPlaylist(arg);
+  } else if (base === 'recent') {
+    crumb = 'Recently added';
+    const rows = libraryTracks()
+      .slice()
+      .sort((a, b) => b.added - a.added);
+    h = rows.length
+      ? '<div class="section-head"><h2>Recently added</h2><span class="sub">newest file first</span></div>' + songTable(rows, { context: 'recent' })
+      : emptyNote('Nothing here yet', 'Songs appear as soon as a folder is scanned.');
   } else if (base === 'settings') {
     crumb = 'Settings';
     h = viewSettings();
@@ -147,6 +198,22 @@ export function wireLibrary(): void {
   view.addEventListener('click', (e) => {
     let el: Element | null;
     const target = e.target as Element;
+    /* Ctrl/Cmd-click on an album tile toggles selection instead of opening. */
+    const tile = target.closest('.tile[data-nav]');
+    if (tile && (e.ctrlKey || e.metaKey) && (tile.getAttribute('data-nav') || '').indexOf('album:') === 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = (tile.getAttribute('data-nav') || '').slice(6);
+      if (selAlbums.has(key)) selAlbums.delete(key);
+      else selAlbums.add(key);
+      tile.classList.toggle('selected', selAlbums.has(key));
+      syncAlbumSelBar();
+      return;
+    }
+    if ((el = target.closest('[data-shuffleall]'))) {
+      shufflePool(libraryTracks());
+      return;
+    }
     if ((el = target.closest('[data-playalbum]'))) {
       e.stopPropagation();
       const al = S.albumMap[el.getAttribute('data-playalbum') || ''];
@@ -189,6 +256,10 @@ export function wireLibrary(): void {
     }
     if ((el = target.closest('[data-export]'))) {
       exportM3U(el.getAttribute('data-export') || '');
+      return;
+    }
+    if ((el = target.closest('[data-exportfiles]'))) {
+      void exportPlaylistFiles(el.getAttribute('data-exportfiles') || '');
       return;
     }
     if ((el = target.closest('[data-edit-title]'))) {
@@ -240,6 +311,24 @@ export function wireLibrary(): void {
     const idx = list.findIndex((t) => t.uid === uid);
     if (idx >= 0) playList(list, idx, { attemptTarget: true });
   });
+
+  const selbar = $('#albumselbar');
+  if (selbar) {
+    selbar.addEventListener('click', (e) => {
+      const target = e.target as Element;
+      if (target.closest('#albumselShuffle')) {
+        const pool: ReturnType<typeof libraryTracks> = [];
+        selAlbums.forEach((key) => {
+          const al = S.albumMap[key];
+          if (al) for (const t of al.tracks) pool.push(t);
+        });
+        clearAlbumSelection();
+        shufflePool(pool);
+        return;
+      }
+      if (target.closest('#albumselClear')) clearAlbumSelection();
+    });
+  }
 
   view.addEventListener('keydown', (e) => {
     const row = (e.target as Element).closest('.row');

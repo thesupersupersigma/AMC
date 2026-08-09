@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import { VitePWA } from 'vite-plugin-pwa';
+
+/* The app shows its own version (Settings footer) so a downloaded
+   single-file build is identifiable from inside. package.json is the
+   source; a release build overrides it from the pushed tag via
+   AMC_VERSION so the artifact and the label can never drift apart. */
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+const APP_VERSION = process.env.AMC_VERSION || pkg.version;
 
 /* Application code only ever calls /api/… — in dev and preview these proxies
    serve it, in production the serverless functions in api/ do. */
@@ -43,6 +51,7 @@ export default defineConfig(({ mode }) => {
   return {
     /* Unminified on purpose: the Chromebook has no DevTools, so stack traces
        only surface in AMC's own error panel, and minified traces are useless. */
+    define: { __AMC_VERSION__: JSON.stringify(APP_VERSION) },
     build: {
       minify: false,
       target: 'es2020',
