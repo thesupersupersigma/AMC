@@ -390,7 +390,10 @@ input[type=range]:hover::-webkit-slider-runnable-track{--fg:var(--accent)}
 .np-artist{font-size:13.5px;color:rgba(255,255,255,.62);text-align:center}
 .np-scrub{position:relative;height:50px;margin-top:12px;width:100%}
 .np-scrub canvas{position:absolute;inset:0;width:100%;height:100%}
-.np-scrub input{position:absolute;inset:0;width:100%;opacity:0;cursor:pointer}
+/* A range input keeps its intrinsic ~14px height unless told otherwise —
+   without the explicit height the waveform is mostly dead canvas and the
+   scrubber "cannot be moved". The input must blanket the whole strip. */
+.np-scrub input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
 .np-times{display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.55);font-variant-numeric:tabular-nums;width:100%}
 .np-controls{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:8px}
 .np-controls .pb-btn{width:40px;height:40px}

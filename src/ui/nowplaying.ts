@@ -289,19 +289,43 @@ export function wireNowPlaying(): void {
       return;
     }
   });
+  /* The pill scrubber's proven pattern: preview while dragging, seek once
+     on release. Seeking on every input event fights the 300ms refresh and
+     stutters the decoder; scrubbing arms on pointerdown so the refresh
+     never snaps the thumb back mid-grab. */
+  view.addEventListener('pointerdown', (e) => {
+    if ((e.target as Element).closest('#npScrubBar')) scrubbing = true;
+  });
   view.addEventListener('input', (e) => {
     const bar = (e.target as Element).closest('#npScrubBar') as HTMLInputElement | null;
     if (!bar || !S.current) return;
     scrubbing = true;
     const w = trackWindow(S.current);
-    const frac = Number(bar.value) / 1000;
-    try {
-      audio.currentTime = w.start + frac * Math.max(0, w.end - w.start);
-    } catch {
-      /* not seekable right now */
-    }
+    const dur = Math.max(0.001, w.end - w.start);
+    const pos = (Number(bar.value) / 1000) * dur;
+    const el = document.getElementById('npElapsed');
+    const rm = document.getElementById('npRemain');
+    if (el) el.textContent = fmtTime(pos);
+    if (rm) rm.textContent = '-' + fmtTime(Math.max(0, dur - pos));
   });
-  view.addEventListener('change', (e) => {
+  const commitSeek = (e: Event): void => {
+    const bar = (e.target as Element).closest('#npScrubBar') as HTMLInputElement | null;
+    if (!bar) return;
+    if (S.current && scrubbing) {
+      const w = trackWindow(S.current);
+      const frac = Number(bar.value) / 1000;
+      try {
+        audio.currentTime = w.start + frac * Math.max(0, w.end - w.start);
+      } catch {
+        /* not seekable right now */
+      }
+    }
+    scrubbing = false;
+    refreshNow();
+  };
+  view.addEventListener('change', commitSeek);
+  view.addEventListener('pointerup', commitSeek);
+  view.addEventListener('pointercancel', (e) => {
     if ((e.target as Element).closest('#npScrubBar')) scrubbing = false;
   });
 }
