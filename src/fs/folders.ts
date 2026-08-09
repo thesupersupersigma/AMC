@@ -268,6 +268,10 @@ export async function reorderFolder(folderId: string, delta: -1 | 1): Promise<vo
     the webkitdirectory input otherwise (Safari, file://) — expected there,
     not an error. */
 export function addFolderViaPicker(): void {
+  /* persist() must ride the click itself — after the picker's awaits the
+     gesture is spent and Chrome quietly declines. The result is surfaced
+     in Settings › Storage, which also offers a re-request button. */
+  askStoragePersist();
   if (canUseFsa()) {
     void (async () => {
       const handle = await pickDirectory();

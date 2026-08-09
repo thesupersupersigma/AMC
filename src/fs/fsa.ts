@@ -273,6 +273,10 @@ export class FsaBackend implements FsBackend {
     }
   }
 
+  sidecarName(): string | null {
+    return this.amcName;
+  }
+
   async ensureSidecarLayout(): Promise<void> {
     const name = await this.resolveAmcName(true);
     const amc = await this.root.getDirectoryHandle(name as string, { create: true });

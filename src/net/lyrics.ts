@@ -10,7 +10,7 @@ import { parseLrc, isSynced } from '../parse/lrc';
 import { legacyCueKey, queueSidecarWrite, stableTrackKey } from '../fs/amcdir';
 import { folderById } from '../fs/folders';
 import { S, refOf } from '../state';
-import { norm } from '../util';
+import { apiUrl, norm } from '../util';
 import { logErr } from '../ui/log';
 
 export interface ResolvedLyrics {
@@ -79,7 +79,7 @@ async function fetchLrclib(t: AnyTrack): Promise<string | null> {
   const qs = (extra: string): string =>
     extra + 'artist_name=' + encodeURIComponent(t.artist) + '&track_name=' + encodeURIComponent(t.title);
   try {
-    const get = await fetch('/api/lrclib/api/get?' + qs('') + '&album_name=' + encodeURIComponent(t.album) + '&duration=' + dur, {
+    const get = await fetch(apiUrl('/api/lrclib/api/get?' + qs('') + '&album_name=' + encodeURIComponent(t.album) + '&duration=' + dur), {
       headers: { accept: 'application/json' },
     });
     if (get.ok) {
@@ -89,7 +89,7 @@ async function fetchLrclib(t: AnyTrack): Promise<string | null> {
     }
     /* No exact match — search, then take the closest duration that has
        synced lyrics (vinyl timings drift a few seconds from the CD). */
-    const sr = await fetch('/api/lrclib/api/search?' + qs(''), { headers: { accept: 'application/json' } });
+    const sr = await fetch(apiUrl('/api/lrclib/api/search?' + qs('')), { headers: { accept: 'application/json' } });
     if (!sr.ok) return null;
     const rows = (await sr.json()) as LrclibRow[];
     const usable = rows.filter(

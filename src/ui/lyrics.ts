@@ -58,6 +58,8 @@ export function toggleLyrics(): void {
   open = !open;
   const panel = $('#lyricspanel');
   panel.classList.toggle('open', open);
+  /* Fullscreen Now Playing reads this to shift its content aside. */
+  document.body.classList.toggle('lyrics-open', open);
   $('#btnLyrics').classList.toggle('on', open);
   if (open) {
     void refresh();

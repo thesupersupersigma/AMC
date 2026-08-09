@@ -9,7 +9,7 @@ import type { Album, CatalogEntry, ConnectedFolder } from '../types';
 import { SCHEMA_VERSION, albumDirOf } from '../state';
 import { queueSidecarWrite } from '../fs/amcdir';
 import { collectionIdFor } from '../fs/overrides';
-import { norm } from '../util';
+import { apiUrl, norm } from '../util';
 import { logErr } from '../ui/log';
 
 export interface CatalogMatch {
@@ -35,7 +35,7 @@ async function apiGet(pathAndQuery: string): Promise<unknown> {
   const wait = Math.max(0, nextSlot - now);
   nextSlot = Math.max(now, nextSlot) + MIN_GAP_MS;
   if (wait) await new Promise((r) => setTimeout(r, wait));
-  const resp = await fetch('/api/itunes/' + pathAndQuery, { headers: { accept: 'application/json' } });
+  const resp = await fetch(apiUrl('/api/itunes/' + pathAndQuery), { headers: { accept: 'application/json' } });
   if (!resp.ok) throw new Error('The catalog request failed (' + resp.status + ')');
   return (await resp.json()) as unknown;
 }
@@ -201,7 +201,7 @@ export async function fetchCatalogFor(folder: ConnectedFolder, al: Album): Promi
 export function artworkProxyUrl(artworkUrl100: string): string {
   try {
     const u = new URL(artworkUrl100);
-    return '/api/itunes/art' + u.pathname.replace(/100x100(bb)?(\.[a-z]+)$/i, '600x600bb$2');
+    return apiUrl('/api/itunes/art' + u.pathname.replace(/100x100(bb)?(\.[a-z]+)$/i, '600x600bb$2'));
   } catch {
     return '';
   }

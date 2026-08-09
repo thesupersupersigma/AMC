@@ -671,7 +671,11 @@ export function backfillDurations(): void {
         t.duration = Math.max(0, t.endSec - t.startSec);
       }
     }
-    detectSplitFlags();
+    /* The full pass, dedupe included: two copies of one probed file carry
+       duration 0 vs 20 at scan end depending on probe timing, and a merge
+       decided on that skew would otherwise stand forever — Home and
+       Settings then disagree about the song count. */
+    reindexLibrary();
     scheduleRender();
   }
   function step(): void {

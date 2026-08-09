@@ -266,6 +266,9 @@ export interface FsBackend {
   removeSidecarDir(relPath: string): Promise<void>;
   /** Creates .AMC/ and its subdirectories. No-op on read-only backends. */
   ensureSidecarLayout(): Promise<void>;
+  /** The sidecar directory name actually in use — "AMC DO NOT DELETE" or an
+      adopted legacy ".AMC" — or null when none has been resolved yet. */
+  sidecarName(): string | null;
 }
 
 /** A music folder the app is (or was) connected to. */

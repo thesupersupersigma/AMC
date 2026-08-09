@@ -7,7 +7,7 @@
    plain sentence saying what needs a served build and why. */
 
 import type { ConnectedFolder } from '../types';
-import { S, SCHEMA_VERSION, applyAccent, savePrefs } from '../state';
+import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs } from '../state';
 import { addFolderViaPicker, connectedFolders, folderById, pendingFolders, removeFolder, reorderFolder } from '../fs/folders';
 import { enqueueFolderScan, rescanLibrary } from '../scan/scanner';
 import { ST_COVERS, ST_TRACKS, idbClear } from '../db/idb';
@@ -27,11 +27,16 @@ export function viewSettings(): string {
   h += '<div class="set-sect"><h2>Music folders</h2><p class="set-hint">Ordered — the first folder wins when the same file exists in two places.</p>';
   const list = connectedFolders();
   list.forEach((f, i) => {
+    const sidecar = f.backend.sidecarName();
     h +=
       '<div class="set-folder">' +
       icon('folder') +
       '<div class="set-fmeta"><b>' + esc(f.label) + '</b>' +
-      '<span>' + (f.capability === 'readwrite' ? 'read &amp; write · sidecar “AMC DO NOT DELETE” inside the folder' : 'read-only in this browser · changes stay in the browser cache') + '</span></div>' +
+      '<span>' +
+      (f.capability === 'readwrite'
+        ? 'read &amp; write · sidecar ' + (sidecar ? '“' + esc(sidecar) + '”' : 'not created yet') + ' inside the folder'
+        : 'read-only in this browser · changes stay in the browser cache' + (sidecar ? ' · reads sidecar “' + esc(sidecar) + '”' : '')) +
+      '</span></div>' +
       '<button type="button" class="kebab-btn" data-fol-up="' + esc(f.folderId) + '" title="Move up" ' + (i === 0 ? 'disabled' : '') + '>' + icon('sortup') + '</button>' +
       '<button type="button" class="kebab-btn" data-fol-down="' + esc(f.folderId) + '" title="Move down" ' + (i === list.length - 1 ? 'disabled' : '') + '>' + icon('chev') + '</button>' +
       '<button type="button" class="pill-ghost set-small" data-fol-rescan="' + esc(f.folderId) + '">Rescan</button>' +
@@ -76,7 +81,7 @@ export function viewSettings(): string {
   h += '</div><span class="set-hint">“Local only” never calls LRCLIB — sidecar, sibling .lrc and tags still work</span></div></div>';
 
   /* Storage */
-  h += '<div class="set-sect"><h2>Storage</h2><div id="setStorage" class="set-hint">Measuring…</div></div>';
+  h += '<div class="set-sect"><h2>Storage</h2><div id="setStorage" class="set-hint">Measuring…</div><div class="set-row" id="setPersistRow" hidden><button type="button" class="pill-ghost set-small" data-set="persist">Request persistent storage</button><span class="set-hint">without it the browser may silently evict the saved folders and caches</span></div></div>';
 
   /* Sidecar export/import */
   h += '<div class="set-sect"><h2>Sidecar</h2><p class="set-hint">The zip carries playlists, cues, lyrics, notes, overrides and settings — the regenerable caches (artwork, catalog, peaks) stay out. Importing writes into the folder’s sidecar and rescans.</p>';
@@ -94,11 +99,14 @@ export function viewSettings(): string {
       '<div class="set-sect"><h2>Running from a file</h2>' +
       '<p class="set-hint">Folder picking with write access needs a served build — file:// pages get no File System Access, so folders are read-only and forgotten when the tab closes.</p>' +
       '<p class="set-hint">Offline installation needs a served build — service workers do not register from file:// pages.</p>' +
-      '<p class="set-hint">Catalog lookups and lyrics need the /api proxy of the served build — direct calls from file:// are blocked by the providers’ CORS.</p>' +
+      '<p class="set-hint">Catalog and lyrics lookups go through music.thesupersupersigma.com while online — this file has no /api of its own. Offline, they fall back to whatever the sidecar already holds.</p>' +
       '</div>';
   }
 
-  h += '<div class="set-sect"><p class="set-hint">Schema v' + SCHEMA_VERSION + ' · AMC v2</p></div>';
+  h += '<div class="set-sect"><p class="set-hint">Schema v' + SCHEMA_VERSION + ' · AMC v2</p>' +
+    '<p class="set-hint">AMC is not affiliated with, endorsed by, or connected to Apple Inc. Apple Music is a trademark of Apple Inc.</p>' +
+    '<p class="set-hint">Made by <a href="https://github.com/thesupersupersigma" target="_blank" rel="noopener">thesupersupersigma</a> and Claude Fable 5</p>' +
+    '</div>';
   h += '</div>';
   return h;
 }
@@ -122,9 +130,14 @@ export function fillStorageInfo(): void {
     if (!el) return;
     el.textContent =
       (est ? est + ' · ' : '') +
-      plural(S.tracks.filter((t) => !t.shadowed && !t.claimedByCue).length, 'track', 'tracks') + ' · ' +
+      plural(libraryTracks().length, 'song', 'songs') + ' · ' +
       plural(S.albums.length, 'album', 'albums') +
-      ' · persistent storage ' + (persisted ? 'granted' : 'not granted (the browser may evict caches)');
+      ' · persistent storage ' +
+      (persisted
+        ? 'granted — the saved folders and caches survive storage cleanup'
+        : 'NOT granted — the browser may silently evict the saved folder handles');
+    const row = document.getElementById('setPersistRow');
+    if (row) row.hidden = persisted;
   })();
 }
 
@@ -317,6 +330,12 @@ export function wireSettings(): void {
       } else if (what === 'gapless') {
         S.gapless = (el as HTMLInputElement).checked;
         savePrefs();
+      } else if (what === 'persist') {
+        /* A real user gesture — the one place a re-request can succeed. */
+        void navigator.storage.persist().then((granted) => {
+          toast(granted ? 'Persistent storage granted' : 'The browser declined — it decides by site engagement');
+          fillStorageInfo();
+        });
       }
       return;
     }

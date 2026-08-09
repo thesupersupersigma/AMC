@@ -32,6 +32,10 @@ interface DiffRow {
   rawTo?: string;
   /** Title rows: the proposed change is only a version suffix. */
   suffixOnly?: boolean;
+  /** With strip-suffixes on, a row whose stripped proposal equals the
+      current value is a no-op — it disappears rather than posing as a
+      change ("Rock with You" → "Rock with You"). */
+  hidden?: boolean;
 }
 
 let mode: 'catalog' | 'ai' | null = null;
@@ -89,10 +93,15 @@ function diffTableHTML(rows: DiffRow[], groups: Array<{ label: string; from: num
   let gi = 0;
   for (let i = 0; i < rows.length; i++) {
     while (gi < groups.length && groups[gi].from === i) {
-      h += '<tr class="diff-group"><td colspan="4">' + esc(groups[gi].label) + '</td></tr>';
+      /* A group whose every row is hidden renders nothing at all. */
+      const g = groups[gi];
+      let visible = false;
+      for (let k = g.from; k < g.to; k++) if (!rows[k].hidden) visible = true;
+      if (visible) h += '<tr class="diff-group"><td colspan="4">' + esc(g.label) + '</td></tr>';
       gi++;
     }
     const r = rows[i];
+    if (r.hidden) continue;
     h +=
       '<tr class="diff-row' + (r.accept ? '' : ' rejected') + '">' +
       '<td><input type="checkbox" data-di="' + i + '"' + (r.accept ? ' checked' : '') + ' aria-label="Accept this change"></td>' +
@@ -112,7 +121,7 @@ function diffTableHTML(rows: DiffRow[], groups: Array<{ label: string; from: num
 /* ---------- apply (shared) ---------- */
 
 function applyAccepted(): void {
-  const accepted = diffRows.filter((r) => r.accept);
+  const accepted = diffRows.filter((r) => r.accept && !r.hidden);
   if (!accepted.length) {
     toast('Nothing accepted — nothing changed');
     closeRepair();
@@ -324,6 +333,8 @@ function applyStripToggle(on: boolean): void {
     const shown = on ? stripVersionSuffix(r.rawTo) : r.rawTo;
     r.to = shown;
     r.value = shown;
+    /* No-op AFTER stripping: nothing would change, so nothing shows. */
+    r.hidden = on && norm(shown) === norm(r.from);
   }
   $('#repairbody').innerHTML = catalogBodyHTML();
 }

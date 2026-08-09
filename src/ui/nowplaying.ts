@@ -25,51 +25,85 @@ let scrubbing = false;
 const paletteCache = new Map<string, [string, string]>();
 let ambientKey = '';
 
-function rgb(r: number, g: number, b: number, scale: number): string {
-  return 'rgb(' + Math.round(r * scale) + ',' + Math.round(g * scale) + ',' + Math.round(b * scale) + ')';
+/** RGB → HSL and back, for taming extracted colours into backdrop range. */
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  const l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h = 0;
+  if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (mx === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return [h / 6, s, l];
+}
+function hslCss(h: number, s: number, l: number): string {
+  return 'hsl(' + Math.round(h * 360) + ',' + Math.round(s * 100) + '%,' + Math.round(l * 100) + '%)';
 }
 
-/** Two colours out of the cover: the mean of its brighter half and the
-    mean of its darker half — cheap, stable, and always album-ish. */
+/** Dominant plus secondary colour via coarse RGB quantisation (512-bucket
+    histogram, weighted toward saturated buckets so a colourful sleeve wins
+    over its grey border). Both are clamped into backdrop range — dark
+    enough that white text always reads. */
 function extractPalette(url: string): Promise<[string, string]> {
+  const FALLBACK: [string, string] = ['#1c1c1e', '#101012'];
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       try {
+        const N = 32;
         const cv = document.createElement('canvas');
-        cv.width = 24;
-        cv.height = 24;
+        cv.width = N;
+        cv.height = N;
         const ctx = cv.getContext('2d');
-        if (!ctx) return resolve(['#1c1c1e', '#101012']);
-        ctx.drawImage(img, 0, 0, 24, 24);
-        const d = ctx.getImageData(0, 0, 24, 24).data;
-        const px: Array<[number, number, number, number]> = [];
-        for (let i = 0; i < d.length; i += 4) {
-          const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
-          px.push([d[i], d[i + 1], d[i + 2], lum]);
+        if (!ctx) return resolve(FALLBACK);
+        ctx.drawImage(img, 0, 0, N, N);
+        const d = ctx.getImageData(0, 0, N, N).data;
+        interface Bucket {
+          n: number;
+          r: number;
+          g: number;
+          b: number;
         }
-        px.sort((a, b) => b[3] - a[3]);
-        const mean = (list: Array<[number, number, number, number]>): [number, number, number] => {
-          let r = 0,
-            g = 0,
-            b = 0;
-          for (const p of list) {
-            r += p[0];
-            g += p[1];
-            b += p[2];
-          }
-          const n = Math.max(1, list.length);
-          return [r / n, g / n, b / n];
-        };
-        const hi = mean(px.slice(0, Math.floor(px.length / 3)));
-        const lo = mean(px.slice(-Math.floor(px.length / 3)));
-        /* Darkened for use as a backdrop — text must stay readable. */
-        resolve([rgb(hi[0], hi[1], hi[2], 0.42), rgb(lo[0], lo[1], lo[2], 0.28)]);
+        const buckets = new Map<number, Bucket>();
+        for (let i = 0; i < d.length; i += 4) {
+          const key = ((d[i] >> 5) << 6) | ((d[i + 1] >> 5) << 3) | (d[i + 2] >> 5);
+          const bk = buckets.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+          bk.n++;
+          bk.r += d[i];
+          bk.g += d[i + 1];
+          bk.b += d[i + 2];
+          buckets.set(key, bk);
+        }
+        const rows = Array.from(buckets.values()).map((bk) => {
+          const r = bk.r / bk.n;
+          const g = bk.g / bk.n;
+          const b = bk.b / bk.n;
+          const [h, s, l] = rgbToHsl(r, g, b);
+          /* Saturated mid-lightness colour outweighs greys and borders. */
+          const score = bk.n * (0.2 + s) * (l > 0.06 && l < 0.94 ? 1 : 0.25);
+          return { r: r, g: g, b: b, h: h, s: s, l: l, score: score };
+        });
+        rows.sort((a, b) => b.score - a.score);
+        const dom = rows[0];
+        if (!dom) return resolve(FALLBACK);
+        const dist = (a: typeof dom, b: typeof dom): number => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+        const sec = rows.find((x) => dist(x, dom) > 120) || rows[1] || dom;
+        /* Into backdrop range: keep the hue, ensure some saturation, pull
+           lightness down where white text lives on top of it. */
+        const c1 = hslCss(dom.h, Math.min(0.75, Math.max(dom.s, 0.28)), Math.min(0.34, Math.max(0.2, dom.l * 0.6)));
+        const c2 = hslCss(sec.h, Math.min(0.7, Math.max(sec.s, 0.22)), Math.min(0.22, Math.max(0.1, sec.l * 0.45)));
+        resolve([c1, c2]);
       } catch {
-        resolve(['#1c1c1e', '#101012']);
+        resolve(FALLBACK);
       }
     };
-    img.onerror = () => resolve(['#1c1c1e', '#101012']);
+    img.onerror = () => resolve(FALLBACK);
     img.src = url;
   });
 }
@@ -176,12 +210,17 @@ export function nowPlayingOpen(): boolean {
   return open;
 }
 
+const REDUCED = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+
 export function openNowPlaying(): void {
   if (open || !S.current) return;
   open = true;
   const view = $('#npview');
   view.innerHTML = markup();
   view.hidden = false;
+  view.classList.remove('np-out');
+  view.classList.add('np-in');
+  setTimeout(() => view.classList.remove('np-in'), 400);
   document.body.classList.add('np-open');
   updateAmbient(S.current);
   refreshNow();
@@ -193,8 +232,18 @@ export function closeNowPlaying(): void {
   open = false;
   if (timer) clearInterval(timer);
   timer = null;
-  $('#npview').hidden = true;
-  document.body.classList.remove('np-open');
+  const view = $('#npview');
+  const finish = (): void => {
+    view.hidden = true;
+    view.classList.remove('np-out');
+    document.body.classList.remove('np-open');
+  };
+  if (REDUCED && REDUCED.matches) {
+    finish();
+    return;
+  }
+  view.classList.add('np-out');
+  setTimeout(finish, 250);
 }
 
 /** Track-change hook from the player: retint always, refresh if open. */

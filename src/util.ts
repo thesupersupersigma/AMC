@@ -64,6 +64,14 @@ export function uuid(): string {
   return s.slice(0, 8) + '-' + s.slice(8, 12) + '-4' + s.slice(13, 16) + '-a' + s.slice(17, 20) + '-' + s.slice(20, 32);
 }
 
+/** Base for /api/… requests. Same-origin normally — the dev proxy and the
+    deployed functions both live there. The single-file build runs from
+    file://, which has no /api at all, so ONLY that case falls back to the
+    deployed origin. Failures still degrade to sidecar-only everywhere. */
+export function apiUrl(path: string): string {
+  return (location.protocol === 'file:' ? 'https://music.thesupersupersigma.com' : '') + path;
+}
+
 export function isTyping(el: EventTarget | null): boolean {
   if (!el || !(el instanceof HTMLElement)) return false;
   const tag = el.tagName;

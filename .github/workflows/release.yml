@@ -1,0 +1,55 @@
+# Release build: on a tag push, build both distributions and attach them.
+#
+# - amc-dist.zip     — the full PWA build. Must be SERVED (any static host or
+#                      `npx serve dist`); double-clicking its index.html gives
+#                      the degraded file:// mode with no service worker.
+# - AMC.html         — the single-file build. Opens directly from disk.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build (served PWA)
+        run: npm run build
+
+      - name: Build (single file)
+        run: npm run build:file
+
+      - name: Package
+        run: |
+          cd dist && zip -r ../amc-dist.zip . && cd ..
+          cp dist-file/index.html AMC.html
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            amc-dist.zip
+            AMC.html
+          body: |
+            **amc-dist.zip** — the full PWA build. Serve it (`npx serve dist` or any static host); it installs offline and carries the /api proxies when deployed to Vercel. Double-clicking its index.html is not supported.
+
+            **AMC.html** — the single-file build. Opens directly from disk with no server. Folder access is read-only there and catalog/lyrics lookups go through music.thesupersupersigma.com while online.

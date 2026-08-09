@@ -16,6 +16,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     res.status(400).json({ error: 'Bad path' });
     return;
   }
+  /* The single-file build runs from file:// with no /api of its own and
+     calls this deployment cross-origin. Artwork carries nothing private. */
+  res.setHeader('access-control-allow-origin', '*');
   try {
     const upstream = await fetch(UPSTREAM + '/' + path);
     const body = Buffer.from(await upstream.arrayBuffer());

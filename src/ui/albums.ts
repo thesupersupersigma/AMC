@@ -1,7 +1,7 @@
 /* Album and artist tiles, the grid, and the Home view. */
 
 import type { Album, Artist } from '../types';
-import { S, haveCover } from '../state';
+import { S, haveCover, libraryTracks } from '../state';
 import { solid, artHTML } from './icons';
 import { esc, plural } from '../util';
 import { emptyNote } from './render';
@@ -50,7 +50,7 @@ export function viewHome(): string {
     .slice(0, 12);
   let h =
     '<div class="section-head"><h2>Recently added</h2><span class="sub">' +
-    plural(S.tracks.length, 'song', 'songs') + ' in ' + plural(S.albums.length, 'album', 'albums') +
+    plural(libraryTracks().length, 'song', 'songs') + ' in ' + plural(S.albums.length, 'album', 'albums') +
     '</span></div>';
   h += grid(recent, albumTile);
   if (S.artists.length) {

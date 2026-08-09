@@ -22,6 +22,7 @@ export class WebkitDirBackend implements FsBackend {
   private files: { path: string; file: File }[] = [];
   /** Path under .AMC/ → File, when the browser included dot-entries. */
   private sidecar = new Map<string, File>();
+  private amcName: string | null = null;
 
   constructor(fileList: FileList | File[]) {
     const all: File[] = Array.prototype.slice.call(fileList);
@@ -32,8 +33,9 @@ export class WebkitDirBackend implements FsBackend {
       /* Either sidecar name: the current one, or a legacy ".AMC" (some
          browsers exclude dot-entries from directory picks — when they do,
          the folder still works and writes stay in the journal). */
-      const amc = path.match(/\/(?:AMC DO NOT DELETE|\.AMC)\//);
+      const amc = path.match(/\/(AMC DO NOT DELETE|\.AMC)\//);
       if (amc && amc.index !== undefined) {
+        this.amcName = amc[1];
         this.sidecar.set(path.slice(amc.index + amc[0].length), f);
         continue;
       }
@@ -98,6 +100,10 @@ export class WebkitDirBackend implements FsBackend {
 
   removeSidecarFile(relPath: string): Promise<void> {
     return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not removed)'));
+  }
+
+  sidecarName(): string | null {
+    return this.amcName;
   }
 
   ensureSidecarLayout(): Promise<void> {

@@ -102,6 +102,7 @@ export function sourcePathOf(t: AnyTrack): string {
 
 function loadTrack(t: AnyTrack, autoplay: boolean): void {
   if (!t) return;
+  xfFiredFor = '';
   if (!t.file) {
     logErr('playback', 'No file behind ' + t.title, t.path);
     return skipAfterFailure();
@@ -188,8 +189,40 @@ function boundaryTick(): void {
   drawWaveformProgress();
   const c = S.current;
   if (!c || audio.paused) return; /* the 'play' listener restarts the loop */
+  checkCrossfadeAdvance(c);
   if (c.kind === 'virtual') checkCueBoundary(c);
   boundaryRaf = requestAnimationFrame(boundaryTick);
+}
+
+/* A crossfade must START before the track ends — once 'ended' fires there
+   is no tail left to overlap. Inside the closing window the queue advances
+   through the SAME next() path a manual skip uses, so loadTrack runs the
+   same fade. Never for the repeat-one loop, never for a contiguous cue
+   neighbour (that stays gapless), and never within one source file — a
+   single element cannot overlap itself. */
+let xfFiredFor = '';
+function checkCrossfadeAdvance(c: AnyTrack): void {
+  if (!(S.crossfadeSec > 0) || audio.paused || S.repeat === 'one') return;
+  if (xfFiredFor === c.uid) return;
+  const end = c.kind === 'virtual' ? c.endSec : c.duration || audio.duration || 0;
+  if (!(end > 0)) return;
+  const remain = end - audio.currentTime;
+  if (remain > S.crossfadeSec || remain <= 0.08) return;
+  const ni = S.qi + 1;
+  const nxt = ni < S.queue.length ? S.queue[ni] : null;
+  if (!nxt) return; /* end of queue: the normal ended/repeat path decides */
+  if (
+    S.gapless &&
+    c.kind === 'virtual' &&
+    nxt.kind === 'virtual' &&
+    nxt.folderId === c.folderId &&
+    nxt.sourcePath === c.sourcePath &&
+    Math.abs(nxt.startSec - c.endSec) < 0.1
+  )
+    return;
+  if (refOf(nxt.folderId, sourcePathOf(nxt)) === refOf(c.folderId, sourcePathOf(c))) return;
+  xfFiredFor = c.uid;
+  next(false);
 }
 
 function checkCueBoundary(c: VirtualTrack): void {
@@ -604,7 +637,9 @@ export function wireAudio(): void {
   audio.addEventListener('timeupdate', () => {
     syncTimeUI();
     /* Hidden tabs suspend requestAnimationFrame; this ~4 Hz check is the
-       coarse safety net that keeps cue boundaries working there. */
+       coarse safety net that keeps cue boundaries — and the natural-end
+       crossfade window — working there. */
+    if (S.current && !audio.paused) checkCrossfadeAdvance(S.current);
     if (S.current && S.current.kind === 'virtual' && !audio.paused) checkCueBoundary(S.current);
     /* Only real elapsed playback clears the failure streak — and proves the
        codec, withdrawing any earlier session verdict against its fourcc.

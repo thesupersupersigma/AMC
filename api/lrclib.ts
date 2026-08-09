@@ -20,6 +20,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
   const qs = params.toString();
   const url = `${UPSTREAM}/${path}${qs ? `?${qs}` : ''}`;
+  /* The single-file build runs from file:// with no /api of its own and
+     calls this deployment cross-origin. Lyrics lookups are public data. */
+  res.setHeader('access-control-allow-origin', '*');
   try {
     const upstream = await fetch(url, {
       headers: { accept: 'application/json', 'user-agent': 'AMC/2.0 (music.thesupersupersigma.com)' },
