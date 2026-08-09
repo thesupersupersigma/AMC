@@ -397,11 +397,12 @@ input[type=range]:hover::-webkit-slider-runnable-track{--fg:var(--accent)}
 .np-controls .pb-btn svg{width:20px;height:20px}
 .np-play{width:54px !important;height:54px !important}
 
-/* Lyrics in fullscreen: the panel slides in from the LEFT and the
-   now-playing block shifts right to make room. */
-body.np-open #lyricspanel{left:10px;right:auto;z-index:120;transform:translateX(calc(-100% - 22px))}
-body.np-open #lyricspanel.open{transform:none}
-body.np-open.lyrics-open .np-inner{transform:translateX(min(215px,24vw))}
+/* Lyrics in fullscreen: the panel slides in from the RIGHT — its usual
+   side — and the now-playing block shifts left to make room. Only the
+   stacking order needs an override; the slide itself is the panel's
+   normal behaviour. */
+body.np-open #lyricspanel{z-index:120}
+body.np-open.lyrics-open .np-inner{transform:translateX(calc(-1 * min(215px, 24vw)))}
 @media (prefers-reduced-motion: reduce){
   #npview.np-in,#npview.np-out{animation:none}
   .np-inner{transition:none}
