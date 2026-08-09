@@ -6,7 +6,7 @@
    /api/itunes/art on the same-origin proxy, never from the CDN directly. */
 
 import type { Album, CatalogEntry, ConnectedFolder } from '../types';
-import { SCHEMA_VERSION } from '../state';
+import { SCHEMA_VERSION, albumDirOf } from '../state';
 import { queueSidecarWrite } from '../fs/amcdir';
 import { collectionIdFor } from '../fs/overrides';
 import { norm } from '../util';
@@ -66,20 +66,71 @@ export function yearOfRelease(e: CatalogEntry): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
+/** The local album's year: tags first, then a year in the album folder's
+    own name — "Michael Jackson - Bad (1987)" knows its edition even when
+    the tags do not. */
+export function albumYearOf(al: Album): number {
+  if (al.year) return al.year;
+  const t0 = al.tracks[0];
+  if (!t0 || !t0.path) return 0;
+  const leaf = albumDirOf(t0.path).split('/').pop() || '';
+  const m = leaf.match(/\((19|20)\d{2}\)/) || leaf.match(/\b(19|20)\d{2}\b/);
+  return m ? parseInt(m[0].replace(/[()]/g, ''), 10) : 0;
+}
+
+/* ---------- version suffixes --------------------------------------------
+   "(2012 Remaster)", "[Single Version]", "(Live)" — trailing parentheticals
+   that name a mastering or variant, not the song. Credit parentheticals
+   ("feat. …", "with …", "Duet …") are part of the title and are kept. */
+
+const VERSION_WORDS = /\b(remaster(ed)?( version)?|(19|20)\d{2}|single version|album version|radio edit|extended( version| mix)?|deluxe( edition)?|anniversary( edition)?|expanded( edition)?|reissue|bonus track|mono|stereo|live|demo|instrumental|acoustic|version|mix|edit)\b/i;
+const CREDIT_WORDS = /feat\.|featuring|\bwith\s|duet/i;
+
+export function stripVersionSuffix(title: string): string {
+  let t = String(title).trim();
+  for (let guard = 0; guard < 4; guard++) {
+    const m = t.match(/[([]([^()[\]]*)[)\]]\s*$/);
+    if (!m || m.index === 0) break;
+    const inner = m[1];
+    if (CREDIT_WORDS.test(inner) || !VERSION_WORDS.test(inner)) break;
+    t = t.slice(0, m.index).trim();
+  }
+  return t || String(title);
+}
+
 /* ---------- search + score ---------- */
+
+/** "Jackson, Michael" and "Michael Jackson" are the same person. */
+function flipComma(s: string): string {
+  const m = String(s).match(/^([^,]+),\s*(.+)$/);
+  return m ? m[2] + ' ' + m[1] : s;
+}
 
 function scoreCandidate(al: Album, c: CatalogEntry): number {
   let s = 0;
-  const cn = norm(c.collectionName);
-  const an = norm(al.album);
+  const cn = norm(stripVersionSuffix(c.collectionName));
+  const an = norm(stripVersionSuffix(al.album));
   if (cn === an) s += 3;
   else if (cn.indexOf(an) === 0 || an.indexOf(cn) === 0) s += 1.5;
   const ca = norm(c.artistName);
   const aa = norm(al.artist);
-  if (ca === aa) s += 2;
+  const aaFlip = norm(flipComma(al.artist));
+  if (ca === aa || ca === aaFlip) s += 2;
   else if (ca.indexOf(aa) >= 0 || aa.indexOf(ca) >= 0) s += 1;
   if (c.trackCount) s += Math.max(0, 1.5 - Math.abs(c.trackCount - al.tracks.length) * 0.3);
-  if (al.year && yearOfRelease(c)) s += Math.max(0, 1 - Math.abs(al.year - yearOfRelease(c)) * 0.25);
+  /* Year agreement outweighs everything except the name itself: iTunes
+     carries several releases of one album, and the right one is the one
+     dated like the local rip. (Reissues often keep the ORIGINAL release
+     date, so agreement cannot prove the same mastering — the diff layer
+     checks titles for that.) */
+  const ly = albumYearOf(al);
+  const cy = yearOfRelease(c);
+  if (ly && cy) {
+    const d = Math.abs(ly - cy);
+    if (d === 0) s += 4;
+    else if (d === 1) s += 2;
+    else s -= Math.min(3, (d - 1) * 0.75);
+  }
   return s;
 }
 

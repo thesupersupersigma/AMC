@@ -6,7 +6,7 @@
 
 import type { AnyTrack, Album, CatalogEntry, ConnectedFolder, Override } from '../types';
 import { S, coverURL, haveCover, libraryTracks, rebuildIndex, storeCover, setCoverLocal } from '../state';
-import { fetchCatalogFor, fetchArtwork, yearOfRelease } from '../net/catalog';
+import { albumYearOf, fetchCatalogFor, fetchArtwork, stripVersionSuffix, yearOfRelease } from '../net/catalog';
 import { artFileOf, recordOverrides, rememberAlbumCollection } from '../fs/overrides';
 import { folderById } from '../fs/folders';
 import { queueSidecarWrite } from '../fs/amcdir';
@@ -27,12 +27,20 @@ interface DiffRow {
   to: string;
   value?: string | number;
   accept: boolean;
+  /** Title rows: the catalog's verbatim proposal, kept while the
+      strip-suffixes toggle rewrites to/value. */
+  rawTo?: string;
+  /** Title rows: the proposed change is only a version suffix. */
+  suffixOnly?: boolean;
 }
 
 let mode: 'catalog' | 'ai' | null = null;
 let diffRows: DiffRow[] = [];
+let diffGroups: Array<{ label: string; from: number; to: number }> = [];
 let diffAlbum: Album | null = null;
 let diffSource: Override['source'] = 'catalog';
+let editionNote = '';
+let stripSuffixesOn = false;
 let artBlob: Blob | null = null;
 let artObjUrl = '';
 
@@ -54,7 +62,10 @@ export function closeRepair(): void {
   $('#repairscrim').hidden = true;
   mode = null;
   diffRows = [];
+  diffGroups = [];
   diffAlbum = null;
+  editionNote = '';
+  stripSuffixesOn = false;
   artBlob = null;
   if (artObjUrl) {
     try {
@@ -119,6 +130,10 @@ function applyAccepted(): void {
     }
     const list: AnyTrack[] = r.uid ? ([S.byUid[r.uid]].filter(Boolean) as AnyTrack[]) : targets;
     for (const t of list) {
+      /* A change that no longer changes anything (a stripped suffix landing
+         back on the original title) writes no override at all. */
+      const cur = (t as unknown as Record<string, string | number | undefined>)[r.field];
+      if (norm(String(cur ?? '')) === norm(String(r.value))) continue;
       const patch = perTrack.get(t.uid) || {};
       patch[r.field as FieldKey] = r.value as string | number;
       perTrack.set(t.uid, patch);
@@ -215,16 +230,18 @@ function matchSongs(al: Album, songs: CatalogEntry[]): Map<string, CatalogEntry>
   return out;
 }
 
-function buildCatalogDiff(al: Album, collection: CatalogEntry, songs: CatalogEntry[]): { rows: DiffRow[]; groups: Array<{ label: string; from: number; to: number }> } {
+function buildCatalogDiff(al: Album, collection: CatalogEntry, songs: CatalogEntry[]): void {
   const rows: DiffRow[] = [];
   const groups: Array<{ label: string; from: number; to: number }> = [];
-  const push = (uid: string, field: FieldKey, label: string, from: string | number, toVal: string | number, accept: boolean): void => {
-    if (norm(String(from)) === norm(String(toVal)) || toVal === '' || toVal === 0) return;
-    rows.push({ uid: uid, field: field, label: label, from: String(from || ''), to: String(toVal), value: toVal, accept: accept });
+  const push = (uid: string, field: FieldKey, label: string, from: string | number, toVal: string | number, accept: boolean): DiffRow | null => {
+    if (norm(String(from)) === norm(String(toVal)) || toVal === '' || toVal === 0) return null;
+    const row: DiffRow = { uid: uid, field: field, label: label, from: String(from || ''), to: String(toVal), value: toVal, accept: accept };
+    rows.push(row);
+    return row;
   };
 
   const gStart = rows.length;
-  push('', 'album', 'Album', al.album, collection.collectionName, true);
+  const albumRow = push('', 'album', 'Album', al.album, collection.collectionName, true);
   push('', 'albumArtist', 'Album artist', al.artist, collection.artistName, true);
   push('', 'year', 'Year', al.year || '', yearOfRelease(collection), true);
   const genres = al.tracks.map((t) => t.genre).filter(Boolean);
@@ -242,16 +259,73 @@ function buildCatalogDiff(al: Album, collection: CatalogEntry, songs: CatalogEnt
   if (rows.length > gStart) groups.push({ label: 'Album — ' + al.album, from: gStart, to: rows.length });
 
   const matched = matchSongs(al, songs);
+  const titleRows: DiffRow[] = [];
   for (const t of al.tracks) {
     const song = matched.get(t.uid);
     if (!song) continue;
     const tStart = rows.length;
-    push(t.uid, 'title', 'Title', t.title, song.trackName || '', true);
+    const titleRow = push(t.uid, 'title', 'Title', t.title, song.trackName || '', true);
+    if (titleRow) {
+      titleRow.rawTo = titleRow.to;
+      titleRow.suffixOnly = norm(stripVersionSuffix(titleRow.to)) === norm(stripVersionSuffix(t.title));
+      titleRows.push(titleRow);
+    }
     push(t.uid, 'track', 'Track №', t.track || '', song.trackNumber || 0, true);
     push(t.uid, 'artist', 'Artist', t.artist, song.artistName, false);
     if (rows.length > tStart) groups.push({ label: (t.track ? t.track + '. ' : '') + t.title, from: tStart, to: rows.length });
   }
-  return { rows: rows, groups: groups };
+
+  /* Edition check. Two signals, because iTunes stamps reissues with the
+     ORIGINAL release date (the 2012 Bad remaster says 1987): a year
+     disagreement, or proposed titles that differ from the local ones only
+     by a version suffix. Either way the titles describe a different
+     edition of the same songs — they start unchecked, and the header says
+     why. The per-row accept mechanism is unchanged. */
+  const localYear = albumYearOf(al);
+  const catYear = yearOfRelease(collection);
+  const yearsDisagree = localYear > 0 && catYear > 0 && localYear !== catYear;
+  const suffixCount = titleRows.filter((r) => r.suffixOnly).length;
+  editionNote = '';
+  if (yearsDisagree) {
+    for (const r of titleRows) r.accept = false;
+    editionNote = 'This looks like a different edition: the local album says ' + localYear + ', the catalog match is dated ' + catYear + '. Title changes start unchecked.';
+  } else if (suffixCount >= 2) {
+    for (const r of titleRows) {
+      if (r.suffixOnly) r.accept = false;
+    }
+    editionNote = 'The catalog match looks like a different mastering — its titles carry version suffixes ("' + esc(String(titleRows.find((r) => r.suffixOnly)!.rawTo)) + '"). Suffix-only title changes start unchecked.';
+  }
+  if (editionNote && albumRow && norm(stripVersionSuffix(String(albumRow.value))) === norm(stripVersionSuffix(al.album))) albumRow.accept = false;
+
+  diffRows = rows;
+  diffGroups = groups;
+}
+
+/** The catalog body: edition banner, the strip-suffixes toggle, the table.
+    One renderer so the artwork-preview and toggle re-renders keep all
+    three in place (accept states live on the rows and survive). */
+function catalogBodyHTML(): string {
+  let h = '';
+  if (editionNote) h += '<div class="diff-note">' + editionNote + '</div>';
+  if (diffRows.some((r) => r.field === 'title' && r.rawTo && stripVersionSuffix(r.rawTo) !== r.rawTo)) {
+    h +=
+      '<label class="diff-toggle"><input type="checkbox" id="stripSuffixes"' +
+      (stripSuffixesOn ? ' checked' : '') +
+      '> Strip version suffixes from titles on apply — “Bad (2012 Remaster)” applies as “Bad”</label>';
+  }
+  h += diffTableHTML(diffRows, diffGroups);
+  return h;
+}
+
+function applyStripToggle(on: boolean): void {
+  stripSuffixesOn = on;
+  for (const r of diffRows) {
+    if (r.field !== 'title' || !r.rawTo) continue;
+    const shown = on ? stripVersionSuffix(r.rawTo) : r.rawTo;
+    r.to = shown;
+    r.value = shown;
+  }
+  $('#repairbody').innerHTML = catalogBodyHTML();
 }
 
 export async function openCatalogReview(albumKey: string): Promise<void> {
@@ -280,12 +354,11 @@ export async function openCatalogReview(albumKey: string): Promise<void> {
     return;
   }
 
-  const built = buildCatalogDiff(al, match.collection, match.songs);
-  diffRows = built.rows;
+  buildCatalogDiff(al, match.collection, match.songs);
   const note = match.fromCache ? 'From the sidecar cache (offline). ' : '';
   showPanel(
     'Catalog match — ' + (match.collection.collectionName || al.album),
-    diffTableHTML(diffRows, built.groups),
+    catalogBodyHTML(),
     'Apply accepted changes',
     note + 'Accepted rows go to overrides.json — audio files are never modified.'
   );
@@ -305,7 +378,7 @@ export async function openCatalogReview(albumKey: string): Promise<void> {
       artRow.accept = false;
     }
     /* Same rows, same groups — re-render with the preview in place. */
-    $('#repairbody').innerHTML = diffTableHTML(diffRows, built.groups);
+    $('#repairbody').innerHTML = catalogBodyHTML();
   }
   /* Keep the collection id with the album on apply. */
   pendingCollection = { folder: folder, albumKey: al.key, collectionId: match.collection.collectionId };
@@ -592,7 +665,12 @@ export function wireRepair(): void {
     applyAccepted();
   });
   $('#repairbody').addEventListener('change', (e) => {
-    const cb = (e.target as HTMLElement).closest('input[data-di]') as HTMLInputElement | null;
+    const target = e.target as HTMLElement;
+    if (target.id === 'stripSuffixes') {
+      applyStripToggle((target as HTMLInputElement).checked);
+      return;
+    }
+    const cb = target.closest('input[data-di]') as HTMLInputElement | null;
     if (!cb) return;
     const i = parseInt(cb.getAttribute('data-di') || '', 10);
     if (diffRows[i]) {
