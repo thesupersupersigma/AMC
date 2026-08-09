@@ -62,6 +62,6 @@ jobs:
             amc-dist-v*.zip
             AMC-v*.html
           body: |
-            **amc-dist-v*.zip** — the full PWA build. Serve it (`npx serve dist` or any static host); it installs offline and carries the /api proxies when deployed to Vercel. Double-clicking its index.html is not supported.
+            **amc-dist-v${{ env.AMC_VERSION }}.zip** — the full PWA build. Serve it (`npx serve dist` or any static host); it installs offline and carries the /api proxies when deployed to Vercel. Double-clicking its index.html is not supported.
 
-            **AMC-v*.html** — the single-file build. Opens directly from disk with no server. Folder access is read-only there and catalog/lyrics lookups go through music.thesupersupersigma.com while online.
+            **AMC-v${{ env.AMC_VERSION }}.html** — the single-file build. Opens directly from disk with no server. Folder access is read-only there and catalog/lyrics lookups go through music.thesupersupersigma.com while online.

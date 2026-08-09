@@ -1,31 +1,43 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { passRateLimit, readLimited, sendProxied } from './_shared';
 
-/* Serverless proxy for iTunes artwork. Search results carry artworkUrl100
-   on Apple's mzstatic CDN — a different host from the Search API, so the
-   /api/itunes function cannot serve it. The isN-ssl shards are
-   interchangeable, so every artwork path is fetched through is1-ssl. The
-   client only ever calls /api/itunes/art/…; vercel.json rewrites the
-   sub-path here. */
+/* Proxy for iTunes artwork. The hostname allowlist is enforced by
+   construction: the client sends only a PATH, and the upstream URL is
+   always built against the single mzstatic host below — no caller-supplied
+   URL or hostname is ever consulted. The path itself must look like an
+   Apple image asset (image/… ending in an image extension); anything else
+   is a 400, so the endpoint cannot fetch arbitrary content even from the
+   allowed host. */
 
 const UPSTREAM = 'https://is1-ssl.mzstatic.com';
+const MAX_BODY_BYTES = 5 * 1048576;
+const CACHE_SECONDS = 604800; /* covers art is immutable per URL */
+
+const ART_PATH = /^image\/[\w\-./%]{1,400}\.(jpe?g|png|webp)$/i;
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  res.setHeader('access-control-allow-origin', '*');
+  if (!passRateLimit(req, res)) return;
+
   const raw = req.query['upstreamPath'];
-  const path = Array.isArray(raw) ? raw.join('/') : raw || '';
-  if (!/^[\w\-./%]*$/.test(path) || path.indexOf('..') >= 0) {
-    res.status(400).json({ error: 'Bad path' });
+  const path = (Array.isArray(raw) ? raw.join('/') : raw || '').replace(/^\/+/, '');
+  if (!ART_PATH.test(path) || path.indexOf('..') >= 0) {
+    res.status(400).json({ error: 'Not an artwork path' });
     return;
   }
-  /* The single-file build runs from file:// with no /api of its own and
-     calls this deployment cross-origin. Artwork carries nothing private. */
-  res.setHeader('access-control-allow-origin', '*');
   try {
     const upstream = await fetch(UPSTREAM + '/' + path);
-    const body = Buffer.from(await upstream.arrayBuffer());
-    res.status(upstream.status);
-    res.setHeader('content-type', upstream.headers.get('content-type') || 'image/jpeg');
-    res.setHeader('cache-control', 'public, s-maxage=604800, stale-while-revalidate=2592000');
-    res.send(body);
+    const type = upstream.headers.get('content-type') || '';
+    if (upstream.ok && type.indexOf('image/') !== 0) {
+      res.status(502).json({ error: 'The upstream did not return an image' });
+      return;
+    }
+    const body = await readLimited(upstream, MAX_BODY_BYTES);
+    if (body === null) {
+      res.status(502).json({ error: 'The upstream response was too large' });
+      return;
+    }
+    sendProxied(res, upstream.status, type || 'image/jpeg', CACHE_SECONDS, body, upstream.ok);
   } catch {
     res.status(502).json({ error: 'The artwork CDN could not be reached' });
   }
