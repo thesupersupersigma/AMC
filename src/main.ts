@@ -31,6 +31,7 @@ import { toggleQueuePanel, queuePanelOpen, wireQueuePanel } from './ui/queue';
 import { closeMenu, menuOpen, wireMenus } from './ui/menu';
 import { wireSearch } from './ui/search';
 import { wireSplitEditor, wireWaveform } from './ui/waveform';
+import { openAiRepair, wireRepair } from './ui/repair';
 
 /* =========================================================================
    Keyboard
@@ -170,6 +171,7 @@ async function boot(): Promise<void> {
   $('#pickBtn').addEventListener('click', addFolderViaPicker);
   $('#addFolderBtn').addEventListener('click', addFolderViaPicker);
   $('#rescanBtn').addEventListener('click', rescanLibrary);
+  $('#repairBtn').addEventListener('click', openAiRepair);
   $<HTMLInputElement>('#picker').addEventListener('change', (e) => {
     const files = (e.target as HTMLInputElement).files;
     if (files && files.length) void addWebkitFolder(files);
@@ -195,6 +197,7 @@ async function boot(): Promise<void> {
   wireFolderUI();
   wireWaveform();
   wireSplitEditor();
+  wireRepair();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();

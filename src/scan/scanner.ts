@@ -19,6 +19,7 @@ import { adoptLegacyPlaylists, reflushFolderPlaylists } from '../ui/playlists';
 import { applyDedupe } from './dedupe';
 import { detectSplitFlags } from './detect';
 import { buildLibraryJson, queueSidecarWrite, stripRoot } from '../fs/amcdir';
+import { applyOverrideToTrack, loadFolderOverrides, restoreSidecarArtwork } from '../fs/overrides';
 import { connectedFolders, folderOrder } from '../fs/folders';
 import { probe } from '../audio/engine';
 import type { CoverRec } from '../types';
@@ -394,6 +395,9 @@ export function enqueueFolderScan(folder: ConnectedFolder): void {
 }
 
 async function scanFolder(folder: ConnectedFolder): Promise<void> {
+  /* Overrides load before any track is built, so accepted corrections are
+     already merged when rows first appear. */
+  await loadFolderOverrides(folder);
   const listed = await folder.backend.listScanFiles();
   const files = listed.filter((f) => extOf(f.path) !== 'cue');
   const cueFiles = listed.filter((f) => extOf(f.path) === 'cue');
@@ -436,6 +440,7 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
         r = { rec: parsed.rec, meta: parsed.meta };
       }
       const t = recToTrack(r.rec, folder.folderId, file);
+      applyOverrideToTrack(t);
       S.tracks.push(t);
       scanned.push(t);
       recByPath.set(t.path, r.rec);
@@ -503,6 +508,7 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
           file
         );
         t2.error = 'Tags could not be read';
+        applyOverrideToTrack(t2);
         S.tracks.push(t2);
         S.byUid[t2.uid] = t2;
       } catch (e2) {
@@ -525,6 +531,9 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
   try {
     const virtuals = await attachCues(folder, scanned, cueFiles, recByPath);
     for (const v of virtuals) {
+      /* Overrides address virtual tracks by their own #cueNN path — that is
+         how an AI answer names the tracks of a vinyl side. */
+      applyOverrideToTrack(v);
       S.tracks.push(v);
       S.byRef[refOf(v.folderId, v.path)] = v;
       S.byUid[v.uid] = v;
@@ -543,6 +552,10 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
   if (!restoredOnce) restoredOnce = restoreLastTrack();
   render();
   backfillDurations();
+
+  /* Albums still without a cover pick one up from the sidecar's artwork/
+     directory — accepted catalog covers survive offline and per machine. */
+  void restoreSidecarArtwork(folder).then(() => scheduleRender());
 
   /* library.json is large and regenerable: written on scan-complete only. */
   if (folder.capability === 'readwrite') {

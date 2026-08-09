@@ -165,6 +165,18 @@ export class FsaBackend implements FsBackend {
     }
   }
 
+  async readSidecarBlob(relPath: string): Promise<Blob | null> {
+    try {
+      const parts = FsaBackend.splitRel(relPath);
+      const dir = await this.sidecarDir(false, parts.slice(0, -1));
+      if (!dir) return null;
+      const fh = await dir.getFileHandle(parts[parts.length - 1]);
+      return await fh.getFile();
+    } catch {
+      return null;
+    }
+  }
+
   /** A missing .AMC (or subdirectory) is a genuinely empty listing; a
       directory that exists but cannot be read must THROW — the reconcile
       sweep treats an empty listing as "deleted outside AMC", and a transient
@@ -192,6 +204,25 @@ export class FsaBackend implements FsBackend {
     const w = await fh.createWritable();
     try {
       await w.write(text);
+    } catch (e) {
+      try {
+        await w.abort();
+      } catch {
+        /* the swap file is discarded either way */
+      }
+      throw e;
+    }
+    await w.close();
+  }
+
+  async writeSidecarBlob(relPath: string, blob: Blob): Promise<void> {
+    const parts = FsaBackend.splitRel(relPath);
+    const dir = await this.sidecarDir(true, parts.slice(0, -1));
+    if (!dir) throw new Error('Could not open .AMC in ' + this.label);
+    const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+    const w = await fh.createWritable();
+    try {
+      await w.write(blob);
     } catch (e) {
       try {
         await w.abort();

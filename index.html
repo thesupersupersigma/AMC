@@ -48,6 +48,10 @@
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
         Rescan library
       </button>
+      <button class="foot-btn" id="repairBtn" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 00-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 006-6l-2.9 2.9-2.1-2.1z"/></svg>
+        Metadata repair
+      </button>
       <button class="foot-btn" id="logBtn" type="button">
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5"/><circle cx="12" cy="16.5" r=".9" fill="currentColor"/><path d="M10.3 3.9L2.6 17.3A2 2 0 004.3 20.3h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
         Activity log
@@ -60,6 +64,7 @@
       <div id="crumb">Albums</div>
       <div class="spacer"></div>
       <div id="scanchip" hidden><span class="spinner"></span><span id="scanText">Scanning</span></div>
+      <div id="wavechip" hidden><span class="spinner"></span><span id="waveText">Analysing waveform</span></div>
       <button id="reconnectChip" type="button" hidden></button>
       <label class="searchbox">
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20.4 20.4l-3.9-3.9"/></svg>
@@ -122,6 +127,19 @@
   <div id="errlist"></div>
   <footer>
     <span class="hint">Everything that failed to parse, decode or save shows up here. Press Ctrl + Shift + D to toggle this panel.</span>
+  </footer>
+</div>
+
+<div id="repairscrim" hidden></div>
+<div id="repairpanel" hidden role="dialog" aria-label="Metadata repair" aria-modal="true">
+  <header>
+    <h3 id="repairTitle">Metadata</h3>
+  </header>
+  <div id="repairbody"></div>
+  <footer>
+    <span class="hint" id="repairHint"></span>
+    <button class="pill-ghost" id="repairCancel" type="button">Close</button>
+    <button class="pill-play" id="repairApply" type="button" hidden>Apply accepted changes</button>
   </footer>
 </div>
 

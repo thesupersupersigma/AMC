@@ -250,13 +250,21 @@ const SPARSE_WINDOW = 256 * 1024;
    only ~18 ms of a 1.7 s bucket at 192 kHz — too thin a slice, the sketch
    under-reads and noise wins. ~80 ms per bucket tracks the envelope. */
 const SPARSE_SLICE_SEC = 0.08;
+/* The ~80 ms is taken as three shorter slices spread across the bucket,
+   not one contiguous run: a transient elsewhere in a ~1.7 s bucket is
+   invisible to a single slice, and three spread ones triple the odds of
+   straddling it for the same total decode time. */
+const SUB_SLICES = 3;
 
 /** The sparse sampler. Returns null when WebCodecs FLAC is unavailable or
-    the file's shape defeats it — callers keep today's skip behaviour then. */
+    the file's shape defeats it — callers keep today's skip behaviour then.
+    subSlices is the spread knob (default three): overriding it exists for
+    quality measurement, where both strategies must run this exact code. */
 export async function generateSparseFlacPeaks(
   file: File,
   buckets = 1500,
-  onProgress?: (bucket: number) => void
+  onProgress?: (fraction: number) => void,
+  subSlices = SUB_SLICES
 ): Promise<PeakData | null> {
   const layout = await readFlacLayout(file);
   if (!layout || !layout.totalSamples) return null;
@@ -320,6 +328,7 @@ export async function generateSparseFlacPeaks(
   }
   const blockGuess = layout.maxBlock || 4096;
   const framesPerBucket = Math.max(3, Math.ceil((SPARSE_SLICE_SEC * layout.rate) / blockGuess));
+  const perSlice = Math.max(1, Math.ceil(framesPerBucket / subSlices));
   /* Positions are picked in TIME, not in bytes: VBR makes byte-uniform
      positions collide into the same time bucket and leave neighbours
      empty. A running byte-per-sample calibration, corrected by every found
@@ -328,46 +337,52 @@ export async function generateSparseFlacPeaks(
   let calibSample = 0;
   let bytesPerSample = span / layout.totalSamples;
   const bpsAvg = bytesPerSample;
+  /* Each sub-slice needs perSlice+1 frames plus room to land mid-frame;
+     sized from the file's own average frame size so three reads per bucket
+     cost about what one big window did. */
+  const winBytes = Math.max(96 * 1024, Math.min(SPARSE_WINDOW, Math.ceil((perSlice + 2) * blockGuess * bpsAvg * 2.5)));
   let contributed = 0;
   for (let bi = 0; bi < buckets; bi++) {
-    const targetSample = ((bi + 0.5) / buckets) * layout.totalSamples;
-    const predicted = calibOff + (targetSample - calibSample) * bytesPerSample;
-    const target = Math.max(layout.audioStart, Math.min(file.size - 64, Math.floor(predicted)));
-    const win = await readBytes(file, target, Math.min(file.size, target + SPARSE_WINDOW));
-    const starts = scanFrames(win, layout, framesPerBucket + 1);
-    if (starts.length < 2) continue;
-    /* Recalibrate from what was actually found there. */
-    const foundOff = target + starts[0].at;
-    const foundSample = starts[0].sampleNumber;
-    if (foundSample > calibSample + layout.rate && foundOff > calibOff) {
-      const local = (foundOff - calibOff) / (foundSample - calibSample);
-      if (local > bpsAvg * 0.2 && local < bpsAvg * 5) bytesPerSample = (bytesPerSample + local) / 2;
-    }
-    calibOff = foundOff;
-    calibSample = foundSample;
-    if (decodeFailed) {
-      try {
-        decoder.close();
-      } catch {
-        /* already closed by the error */
+    for (let si = 0; si < subSlices; si++) {
+      const targetSample = ((bi + (si + 0.5) / subSlices) / buckets) * layout.totalSamples;
+      const predicted = calibOff + (targetSample - calibSample) * bytesPerSample;
+      const target = Math.max(layout.audioStart, Math.min(file.size - 64, Math.floor(predicted)));
+      const win = await readBytes(file, target, Math.min(file.size, target + winBytes));
+      const starts = scanFrames(win, layout, perSlice + 1);
+      if (starts.length < 2) continue;
+      /* Recalibrate from what was actually found there. */
+      const foundOff = target + starts[0].at;
+      const foundSample = starts[0].sampleNumber;
+      if (foundSample > calibSample + layout.rate && foundOff > calibOff) {
+        const local = (foundOff - calibOff) / (foundSample - calibSample);
+        if (local > bpsAvg * 0.2 && local < bpsAvg * 5) bytesPerSample = (bytesPerSample + local) / 2;
       }
-      decoder = makeDecoder();
-      decodeFailed = false;
-    }
-    const usable = Math.min(framesPerBucket, starts.length - 1);
-    for (let k = 0; k < usable; k++) {
-      /* The frame's own sample number places it in the time-correct bucket —
-         VBR compression skews byte positions, sample positions never lie. */
-      const tb = Math.max(0, Math.min(buckets - 1, Math.floor((starts[k].sampleNumber / layout.totalSamples) * buckets)));
-      const bytes = win.slice(starts[k].at, starts[k + 1].at);
-      try {
-        pendingBuckets.push(tb);
-        decoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: contributed * 1000, data: bytes }));
-        contributed++;
-      } catch {
-        pendingBuckets.pop();
-        decodeFailed = true;
-        break;
+      calibOff = foundOff;
+      calibSample = foundSample;
+      if (decodeFailed) {
+        try {
+          decoder.close();
+        } catch {
+          /* already closed by the error */
+        }
+        decoder = makeDecoder();
+        decodeFailed = false;
+      }
+      const usable = Math.min(perSlice, starts.length - 1);
+      for (let k = 0; k < usable; k++) {
+        /* The frame's own sample number places it in the time-correct bucket —
+           VBR compression skews byte positions, sample positions never lie. */
+        const tb = Math.max(0, Math.min(buckets - 1, Math.floor((starts[k].sampleNumber / layout.totalSamples) * buckets)));
+        const bytes = win.slice(starts[k].at, starts[k + 1].at);
+        try {
+          pendingBuckets.push(tb);
+          decoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: contributed * 1000, data: bytes }));
+          contributed++;
+        } catch {
+          pendingBuckets.pop();
+          decodeFailed = true;
+          break;
+        }
       }
     }
     /* Periodic flush bounds the decode queue; association is by submission
@@ -379,8 +394,8 @@ export async function generateSparseFlacPeaks(
         decodeFailed = true;
       }
       pendingBuckets.length = 0; /* a failed flush drops its outputs */
+      if (onProgress) onProgress((bi + 1) / buckets);
     }
-    if (onProgress && bi % 100 === 0) onProgress(bi);
   }
   try {
     await decoder.flush();

@@ -17,7 +17,8 @@ export const ST_TRACKS = 'tracks',
   ST_COVERS = 'covers',
   ST_PLAYLISTS = 'playlists',
   ST_FOLDERS = 'folders',
-  ST_META = 'meta';
+  ST_META = 'meta',
+  ST_OVERRIDES = 'overrides';
 
 const STORE_DEFS: Array<[string, string]> = [
   [ST_TRACKS, 'key'],
@@ -25,6 +26,11 @@ const STORE_DEFS: Array<[string, string]> = [
   [ST_PLAYLISTS, 'id'],
   [ST_FOLDERS, 'folderId'],
   [ST_META, 'key'],
+  /* Phase 4: the overrides write journal, one row per folder. The sidecar
+     overrides.json is the source of truth; this row is the browser cache
+     that survives a read-only or disconnected folder. The self-healing
+     open creates it on databases from before Phase 4. */
+  [ST_OVERRIDES, 'folderId'],
 ];
 
 let db: IDBDatabase | null = null;

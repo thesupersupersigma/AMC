@@ -28,6 +28,25 @@ let lastProgressPx = -1;
 const generating = new Set<string>();
 const MAX_DECODE_BYTES = 600 * 1048576;
 
+/* Generations run strictly one at a time: two multi-GB analyses at once
+   would double the decode load on a 4-thread machine for no gain. The app
+   stays interactive throughout — the work is windowed reads and off-thread
+   decodes, and the plain slider carries on until peaks land. */
+let genChain: Promise<void> = Promise.resolve();
+let genActive = 0;
+
+function waveChip(text: string | null): void {
+  const chip = $('#wavechip');
+  if (!chip) return;
+  if (text === null) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  const label = $('#waveText');
+  if (label) label.textContent = text;
+}
+
 function sourceOf(t: AnyTrack): { path: string; file?: File } {
   return t.kind === 'virtual' ? { path: t.sourcePath, file: t.file } : { path: t.path, file: t.file };
 }
@@ -163,41 +182,57 @@ export async function waveformTrackChanged(): Promise<void> {
     draw();
     return;
   }
-  void generatePeaks(folder, key, src.path, src.file, curDuration);
+  generatePeaks(folder, key, src.path, src.file, curDuration);
 }
 
-/** Lazy one-time peak generation. Small files decode fully (streaming path,
-    unchanged); multi-GB FLACs go through the sparse WebCodecs sampler,
-    which never holds the file in memory. Where neither applies — an
-    oversized non-FLAC, or a browser without WebCodecs FLAC — nothing
-    changes: no waveform, plain slider. */
-async function generatePeaks(folder: ConnectedFolder, key: string, path: string, file: File | undefined, durationHint: number): Promise<void> {
+/** Lazy one-time peak generation — only ever for a track that was played or
+    opened, never for the library wholesale. Queued so analyses run one at a
+    time, with live progress in the wave chip. Small files decode fully
+    (streaming path, unchanged); multi-GB FLACs go through the sparse
+    WebCodecs sampler, which never holds the file in memory. Where neither
+    applies — an oversized non-FLAC, or a browser without WebCodecs FLAC —
+    nothing changes: no waveform, plain slider. */
+function generatePeaks(folder: ConnectedFolder, key: string, path: string, file: File | undefined, durationHint: number): void {
   if (!file || generating.has(key)) return;
   generating.add(key);
-  try {
-    let data: PeakData | null = null;
-    if (file.size > MAX_DECODE_BYTES) {
-      if (extOf(file.name) === 'flac') data = await generateSparseFlacPeaks(file);
-      if (!data) return; /* unsupported or defeated — today's skip behaviour */
-    } else {
-      const rate = 8000;
-      const raw = await file.arrayBuffer();
-      const ctx = new OfflineAudioContext(1, Math.max(rate, Math.ceil(Math.max(1, durationHint || 60) * rate)), rate);
-      const decoded = await ctx.decodeAudioData(raw);
-      const channels: Float32Array[] = [];
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) channels.push(decoded.getChannelData(ch));
-      data = { version: 1, duration: decoded.duration, pairs: bucketPeaks(channels, 1500) };
+  genActive++;
+  genChain = genChain
+    .then(() => doGenerate(folder, key, path, file, durationHint))
+    .catch(() => {
+      /* undecodable here (ec-3 and friends) — the plain slider carries on */
+    })
+    .then(() => {
+      generating.delete(key);
+      genActive--;
+      if (!genActive) waveChip(null);
+    });
+}
+
+async function doGenerate(folder: ConnectedFolder, key: string, path: string, file: File, durationHint: number): Promise<void> {
+  let data: PeakData | null = null;
+  if (file.size > MAX_DECODE_BYTES) {
+    if (extOf(file.name) === 'flac') {
+      waveChip('Analysing waveform… 0%');
+      data = await generateSparseFlacPeaks(file, 1500, (f) => {
+        waveChip('Analysing waveform… ' + Math.round(f * 100) + '%');
+      });
     }
-    savePeaks(folder, path, data);
-    if (curKey === key) {
-      curPeaks = data;
-      if (!curDuration) curDuration = data.duration;
-      draw();
-    }
-  } catch {
-    /* undecodable here (ec-3 and friends) — the plain slider carries on */
-  } finally {
-    generating.delete(key);
+    if (!data) return; /* unsupported or defeated — today's skip behaviour */
+  } else {
+    waveChip('Analysing waveform…');
+    const rate = 8000;
+    const raw = await file.arrayBuffer();
+    const ctx = new OfflineAudioContext(1, Math.max(rate, Math.ceil(Math.max(1, durationHint || 60) * rate)), rate);
+    const decoded = await ctx.decodeAudioData(raw);
+    const channels: Float32Array[] = [];
+    for (let ch = 0; ch < decoded.numberOfChannels; ch++) channels.push(decoded.getChannelData(ch));
+    data = { version: 1, duration: decoded.duration, pairs: bucketPeaks(channels, 1500) };
+  }
+  savePeaks(folder, path, data);
+  if (curKey === key) {
+    curPeaks = data;
+    if (!curDuration) curDuration = data.duration;
+    draw();
   }
 }
 

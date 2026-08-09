@@ -185,6 +185,37 @@ export interface Override {
   appliedAt: number;
 }
 
+/** One folder's overrides, as stored: sidecar overrides.json and the IDB
+    journal row share this shape. Keys are folder-relative paths (no root
+    segment, no folderId) so the file is portable across machines. */
+export interface OverrideRows {
+  [relPath: string]: {
+    fields: Override['fields'];
+    source: Override['source'];
+    appliedAt: number;
+  };
+}
+
+/** Album-level memo: which catalog collection a review accepted, so a later
+    re-open can serve from the sidecar cache without a search. */
+export interface OverrideAlbums {
+  [albumKey: string]: { collectionId: number };
+}
+
+export interface SidecarOverrides {
+  schemaVersion: number;
+  rows: OverrideRows;
+  albums: OverrideAlbums;
+}
+
+/** IDB journal row for one folder's overrides. dirty = sidecar copy behind. */
+export interface OverridesRec {
+  folderId: string;
+  rows: OverrideRows;
+  albums: OverrideAlbums;
+  dirty?: number;
+}
+
 /** Downsampled waveform, ~1500 min/max pairs, stored in .AMC/peaks/. */
 export interface PeakData {
   version: 1;
@@ -204,11 +235,15 @@ export interface FsBackend {
   listScanFiles(): Promise<{ path: string; file: File }[]>;
   /** Text of a file inside .AMC/, or null when absent or unreadable. */
   readSidecarText(relPath: string): Promise<string | null>;
+  /** Bytes of a file inside .AMC/ (artwork), or null when absent. */
+  readSidecarBlob(relPath: string): Promise<Blob | null>;
   /** Names of files inside a .AMC/ subdirectory ('' for .AMC itself). */
   listSidecarDir(relPath: string): Promise<string[]>;
   /** Writes inside .AMC/ only; must throw on failure — a failed write is
       never treated as success. Read-only backends always throw. */
   writeSidecarText(relPath: string, text: string): Promise<void>;
+  /** Binary sibling of writeSidecarText — same rules, same failure contract. */
+  writeSidecarBlob(relPath: string, blob: Blob): Promise<void>;
   /** Removes a file inside .AMC/; missing files are not an error. */
   removeSidecarFile(relPath: string): Promise<void>;
   /** Creates .AMC/ and its subdirectories. No-op on read-only backends. */

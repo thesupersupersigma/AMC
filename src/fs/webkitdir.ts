@@ -57,6 +57,10 @@ export class WebkitDirBackend implements FsBackend {
     }
   }
 
+  readSidecarBlob(relPath: string): Promise<Blob | null> {
+    return Promise.resolve(this.sidecar.get(relPath) || null);
+  }
+
   listSidecarDir(relPath: string): Promise<string[]> {
     const prefix = relPath ? relPath.replace(/\/+$/, '') + '/' : '';
     const names: string[] = [];
@@ -71,6 +75,10 @@ export class WebkitDirBackend implements FsBackend {
   }
 
   writeSidecarText(relPath: string): Promise<void> {
+    return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not written)'));
+  }
+
+  writeSidecarBlob(relPath: string): Promise<void> {
     return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not written)'));
   }
 

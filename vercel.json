@@ -2,6 +2,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/itunes/art/:path*", "destination": "/api/itunes-art?upstreamPath=:path*" },
     { "source": "/api/itunes/:path*", "destination": "/api/itunes?upstreamPath=:path*" },
     { "source": "/api/lrclib/:path*", "destination": "/api/lrclib?upstreamPath=:path*" }
   ]

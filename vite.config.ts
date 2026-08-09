@@ -5,6 +5,13 @@ import { VitePWA } from 'vite-plugin-pwa';
 /* Application code only ever calls /api/… — in dev and preview these proxies
    serve it, in production the serverless functions in api/ do. */
 const proxy: Record<string, ProxyOptions> = {
+  /* Declared before /api/itunes — the dev proxy matches in insertion order,
+     and artwork lives on the mzstatic CDN, not the Search API host. */
+  '/api/itunes/art': {
+    target: 'https://is1-ssl.mzstatic.com',
+    changeOrigin: true,
+    rewrite: (p) => p.replace(/^\/api\/itunes\/art/, ''),
+  },
   '/api/itunes': {
     target: 'https://itunes.apple.com',
     changeOrigin: true,

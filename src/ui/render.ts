@@ -11,6 +11,7 @@ import { viewPlaylist, movePlaylistRow, playlistById, playlistTracks, exportM3U,
 import { songTable, sortTracks, clearSelection, setSelectionUI, handleRowSelect, actionEntries, setLastSelIndex } from './songs';
 import type { PlaylistEntry } from '../types';
 import { playList, toggleShuffle, syncPlayerUI } from './player';
+import { openCatalogReview } from './repair';
 import { closeMenu, openRowMenu } from './menu';
 import { isMissingTrack } from '../state';
 import type { SortCol } from '../types';
@@ -175,6 +176,10 @@ export function wireLibrary(): void {
           playList(live, Math.floor(Math.random() * live.length));
         }
       }
+      return;
+    }
+    if ((el = target.closest('[data-catalog]'))) {
+      void openCatalogReview(el.getAttribute('data-catalog') || '');
       return;
     }
     if ((el = target.closest('[data-export]'))) {

@@ -23,6 +23,7 @@ export function viewAlbum(key: string): string {
     '<div class="actions">' +
     '<button class="pill-play" type="button" data-playalbum="' + esc(al.key) + '">' + solid('play') + 'Play</button>' +
     '<button class="pill-ghost" type="button" data-shufflealbum="' + esc(al.key) + '">' + icon('shuffle') + 'Shuffle</button>' +
+    '<button class="pill-ghost" type="button" data-catalog="' + esc(al.key) + '" title="Match this album against the iTunes catalog and review corrections">' + icon('search') + 'Match catalog</button>' +
     '</div>' +
     '</div>' +
     '</div>';
