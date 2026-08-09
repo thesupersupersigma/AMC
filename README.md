@@ -138,6 +138,6 @@ Apple Music is a trademark of Apple Inc.
 
 <div align="center">
 
-Made by [thesupersupersigma](https://github.com/thesupersupersigma) and Claude Fable 5
+Made by [thesupersupersigma](https://github.com/thesupersupersigma) and [Claude Fable 5](https://www.anthropic.com/claude/fable)
 
 </div>
