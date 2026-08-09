@@ -1,5 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { passRateLimit, readLimited, sendProxied } from './_shared';
+/* The .js extension is required: Node's ESM resolver needs the full
+   runtime specifier even when the source is TypeScript — extensionless
+   './_shared' compiles fine and then dies with ERR_MODULE_NOT_FOUND in
+   the deployed function. */
+import { passRateLimit, readLimited, sendProxied } from './_shared.js';
 
 /* Proxy for the iTunes Search API — a CLOSED proxy, not a forwarder.
    Upstream URLs are built only against the two fixed endpoints below;
@@ -31,7 +35,17 @@ function firstOf(v: string | string[] | undefined): string {
   return Array.isArray(v) ? v[0] || '' : v || '';
 }
 
+/* No input may crash the function outright: the whole body runs inside
+   one catch that answers 500 with a short JSON error. */
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  try {
+    await run(req, res);
+  } catch {
+    if (!res.headersSent) res.status(500).json({ error: 'Internal proxy error' });
+  }
+}
+
+async function run(req: VercelRequest, res: VercelResponse): Promise<void> {
   res.setHeader('access-control-allow-origin', '*');
   if (!passRateLimit(req, res)) return;
 

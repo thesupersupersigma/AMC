@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { passRateLimit, readLimited, sendProxied } from './_shared';
+import { passRateLimit, readLimited, sendProxied } from './_shared.js';
 
 /* Proxy for iTunes artwork. The hostname allowlist is enforced by
    construction: the client sends only a PATH, and the upstream URL is
@@ -15,7 +15,16 @@ const CACHE_SECONDS = 604800; /* covers art is immutable per URL */
 
 const ART_PATH = /^image\/[\w\-./%]{1,400}\.(jpe?g|png|webp)$/i;
 
+/* No input may crash the function outright. */
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  try {
+    await run(req, res);
+  } catch {
+    if (!res.headersSent) res.status(500).json({ error: 'Internal proxy error' });
+  }
+}
+
+async function run(req: VercelRequest, res: VercelResponse): Promise<void> {
   res.setHeader('access-control-allow-origin', '*');
   if (!passRateLimit(req, res)) return;
 

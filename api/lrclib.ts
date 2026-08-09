@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { passRateLimit, readLimited, sendProxied } from './_shared';
+import { passRateLimit, readLimited, sendProxied } from './_shared.js';
 
 /* Proxy for LRCLIB — closed like the iTunes one: only the two fixed
    endpoints, only whitelisted parameters, and a lookup must actually name
@@ -25,7 +25,16 @@ function firstOf(v: string | string[] | undefined): string {
   return Array.isArray(v) ? v[0] || '' : v || '';
 }
 
+/* No input may crash the function outright. */
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  try {
+    await run(req, res);
+  } catch {
+    if (!res.headersSent) res.status(500).json({ error: 'Internal proxy error' });
+  }
+}
+
+async function run(req: VercelRequest, res: VercelResponse): Promise<void> {
   res.setHeader('access-control-allow-origin', '*');
   if (!passRateLimit(req, res)) return;
 
