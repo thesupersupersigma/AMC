@@ -12,15 +12,32 @@
 
 const base = (process.argv[2] || '').replace(/\/+$/, '');
 if (!/^https?:\/\//.test(base)) {
-  console.error('Usage: node scripts/smoke-api.mjs https://<deployment-url>');
+  console.error('Usage: node scripts/smoke-api.mjs https://<deployment-url> [--share <token>]');
+  console.error('  --share: a _vercel_share token for previews behind Vercel Authentication');
   process.exit(2);
+}
+const shareIdx = process.argv.indexOf('--share');
+const shareToken = shareIdx > 0 ? process.argv[shareIdx + 1] || '' : '';
+
+/* Previews behind Vercel Authentication accept a share token once, then
+   authenticate by cookie — exchange it up front so the actual smoke
+   requests run exactly like a normal client's. */
+let cookie = '';
+if (shareToken) {
+  const resp = await fetch(base + '/?_vercel_share=' + encodeURIComponent(shareToken), { redirect: 'manual' });
+  const setCookie = resp.headers.get('set-cookie') || '';
+  const m = setCookie.match(/_vercel_jwt=[^;]+/);
+  if (m) cookie = m[0];
+  else console.error('warning: share token did not yield an auth cookie');
 }
 
 const results = [];
 const check = (name, ok, detail = '') => results.push({ name, ok, detail });
 
 async function hit(path) {
-  const resp = await fetch(base + path, { headers: { accept: 'application/json' } });
+  const headers = { accept: 'application/json' };
+  if (cookie) headers.cookie = cookie;
+  const resp = await fetch(base + path, { headers });
   const buf = new Uint8Array(await resp.arrayBuffer());
   return { status: resp.status, type: resp.headers.get('content-type') || '', buf };
 }
