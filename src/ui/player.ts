@@ -3,9 +3,10 @@
 
 import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
 import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
-import { audio, createTrackURL, getLoadedSrcKey, revokeCurrentURL, setLoadedSrcKey } from '../audio/engine';
+import { audio, cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';
 import { lyricsTrackChanged } from './lyrics';
+import { nowPlayingTrackChanged } from './nowplaying';
 import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
 import { icon, solid, artHTML } from './icons';
@@ -110,6 +111,15 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
      same rip): keep the decoded stream, just move the playhead. */
   const reuse = srcKey === getLoadedSrcKey() && !!audio.src;
   if (!reuse) {
+    /* Crossfade: hand the outgoing tail to a side element before this one
+       switches files, then ramp the incoming track up under it. Same-file
+       cue advances never reach here — that path stays gapless. */
+    const prev = S.current;
+    const xf = S.crossfadeSec;
+    if (xf > 0 && autoplay && prev && prev.file && !audio.paused && audio.currentTime > 0) {
+      startCrossfadeTail(prev.file, audio.currentTime, audio.muted ? 0 : audio.volume, xf);
+      rampMainVolume(S.muted ? 0 : S.volume, xf);
+    }
     revokeCurrentURL();
     let url: string;
     try {
@@ -157,6 +167,7 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
   render();
   void waveformTrackChanged();
   lyricsTrackChanged();
+  nowPlayingTrackChanged();
   startBoundaryLoop();
 }
 
@@ -195,6 +206,7 @@ function checkCueBoundary(c: VirtualTrack): void {
   const ni = S.qi + 1;
   const nxt = ni < S.queue.length ? S.queue[ni] : null;
   if (
+    S.gapless &&
     nxt &&
     nxt.kind === 'virtual' &&
     nxt.folderId === c.folderId &&
@@ -212,6 +224,7 @@ function checkCueBoundary(c: VirtualTrack): void {
     savePrefs();
     void waveformTrackChanged();
     lyricsTrackChanged();
+    nowPlayingTrackChanged();
     return;
   }
   audio.pause();
@@ -545,6 +558,7 @@ export function wirePlayerBar(): void {
   vol.addEventListener('input', () => {
     S.muted = false;
     audio.muted = false;
+    cancelMainRamp(); /* the user's hand beats a crossfade ramp */
     setVolume(Number(vol.value) / 100);
   });
 }

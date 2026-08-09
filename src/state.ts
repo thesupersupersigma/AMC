@@ -1,14 +1,16 @@
 /* App state, the library index, artwork caches, and preferences. */
 
-import type { Album, AnyTrack, Artist, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
+import type { Album, AnyTrack, Artist, LyricsSource, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
 import { $$, clamp, norm } from './util';
 import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
 
 /** Stored-data schema. 2 = real folderIds everywhere (the Phase 1 'local'
-    placeholder is never persisted). Written to IDB meta and every sidecar
-    settings.json; Phase 5's migration machinery keys off it. */
-export const SCHEMA_VERSION = 2;
+    placeholder is never persisted). 3 = overrides and lyrics key cue-carved
+    tracks by start time (`#t<centisec>`) instead of the ordinal `#cueNN`,
+    which shifted under every boundary edit. Written to IDB meta and every
+    sidecar settings.json; db/migrate.ts keys off it. */
+export const SCHEMA_VERSION = 3;
 
 /* Track identity is folderId + path, never path alone. The separator is a
    control character no filesystem allows in names. */
@@ -50,6 +52,10 @@ export interface AppState {
   scanDone: number;
   scanTotal: number;
   hasFolder: boolean;
+  gapless: boolean;
+  crossfadeSec: number;
+  accent: string;
+  lyricsSource: LyricsSource;
 }
 
 export const S: AppState = {
@@ -70,6 +76,7 @@ export const S: AppState = {
   lastPos: 0,
   scanning: false, scanDone: 0, scanTotal: 0,
   hasFolder: false,
+  gapless: true, crossfadeSec: 0, accent: '', lyricsSource: 'auto',
 };
 
 /* ---------- album / artist keys ---------- */
@@ -413,6 +420,16 @@ export function storeCover(key: string, blob: Blob | null): Promise<void> {
 
 const PREF_KEY = 'tsss_player_prefs';
 
+/** Sets (or resets, with '') the accent custom property app-wide. */
+export function applyAccent(hex: string): void {
+  try {
+    if (/^#[0-9a-f]{6}$/i.test(hex)) document.documentElement.style.setProperty('--accent', hex);
+    else document.documentElement.style.removeProperty('--accent');
+  } catch {
+    /* styling only */
+  }
+}
+
 export const PREFS: Prefs = {};
 
 function loadLocalPrefs(): Prefs {
@@ -442,6 +459,10 @@ export function currentPrefs(): Prefs {
     lastRef: cur ? { folderId: cur.folderId, path: cur.path } : undefined,
     lastPos: S.lastPos || 0,
     sort: S.sort,
+    gapless: S.gapless,
+    crossfadeSec: S.crossfadeSec,
+    accent: S.accent,
+    lyricsSource: S.lyricsSource,
   };
 }
 
@@ -479,6 +500,11 @@ export async function seedStateFromPrefs(): Promise<void> {
   Object.assign(PREFS, stored);
   S.volume = typeof PREFS.volume === 'number' ? clamp(PREFS.volume, 0, 1) : 1;
   S.muted = !!PREFS.muted;
+  S.gapless = PREFS.gapless !== false;
+  S.crossfadeSec = typeof PREFS.crossfadeSec === 'number' ? clamp(PREFS.crossfadeSec, 0, 12) : 0;
+  S.accent = typeof PREFS.accent === 'string' ? PREFS.accent : '';
+  S.lyricsSource = PREFS.lyricsSource === 'local' || PREFS.lyricsSource === 'off' ? PREFS.lyricsSource : 'auto';
+  applyAccent(S.accent);
   S.shuffle = !!PREFS.shuffle;
   S.repeat = PREFS.repeat === 'all' || PREFS.repeat === 'one' ? PREFS.repeat : 'off';
   S.view = PREFS.view || 'albums';

@@ -20,6 +20,25 @@ export function stripRoot(path: string): string {
   return i < 0 ? path : path.slice(i + 1);
 }
 
+/** The folder-relative key sidecar data (overrides, lyrics) is stored
+    under. Cue-carved tracks key on their START TIME in centiseconds —
+    `…flac#t24920` — never on their ordinal: inserting or removing one cue
+    boundary shifts every later ordinal, and a `#cue03` written yesterday
+    would silently belong to a different song today. A start time only
+    moves when that track's own boundary is edited. (Schema v3; v2 wrote
+    `#cueNN` ordinals, migrated by db/migrate.ts.) */
+export function stableTrackKey(t: AnyTrack): string {
+  if (t.kind === 'virtual') return stripRoot(t.sourcePath) + '#t' + Math.round(t.startSec * 100);
+  return stripRoot(t.path);
+}
+
+/** The v2 ordinal key a virtual track used to be stored under. Kept as a
+    read fallback so an unmigrated (read-only) folder still resolves. */
+export function legacyCueKey(t: AnyTrack): string | null {
+  if (t.kind !== 'virtual') return null;
+  return stripRoot(t.sourcePath) + '#cue' + String(t.cueIndex).padStart(2, '0');
+}
+
 /* ---------- settings.json ---------- */
 
 export async function readSettings(backend: ConnectedFolder['backend']): Promise<SidecarSettings | null> {

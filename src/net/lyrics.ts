@@ -7,9 +7,9 @@
 
 import type { AnyTrack, LrcLine } from '../types';
 import { parseLrc, isSynced } from '../parse/lrc';
-import { queueSidecarWrite, stripRoot } from '../fs/amcdir';
+import { legacyCueKey, queueSidecarWrite, stableTrackKey } from '../fs/amcdir';
 import { folderById } from '../fs/folders';
-import { refOf } from '../state';
+import { S, refOf } from '../state';
 import { norm } from '../util';
 import { logErr } from '../ui/log';
 
@@ -39,7 +39,13 @@ function siblingFor(t: AnyTrack): File | null {
 }
 
 export function sidecarLyricsRel(t: AnyTrack): string {
-  return 'lyrics/' + stripRoot(t.path) + '.lrc';
+  return 'lyrics/' + stableTrackKey(t) + '.lrc';
+}
+
+/** Read fallback for folders still on v2 keys (read-only, unmigratable). */
+function legacyLyricsRel(t: AnyTrack): string | null {
+  const k = legacyCueKey(t);
+  return k ? 'lyrics/' + k + '.lrc' : null;
 }
 
 /* One verdict per track per session — a 404 must not refetch on every
@@ -108,6 +114,7 @@ async function fetchLrclib(t: AnyTrack): Promise<string | null> {
 
 /** The source chain. Returns null when every source came up empty. */
 export async function resolveLyrics(t: AnyTrack): Promise<ResolvedLyrics | null> {
+  if (S.lyricsSource === 'off') return null;
   const key = refOf(t.folderId, t.path);
   if (cache.has(key)) return cache.get(key) || null;
 
@@ -116,7 +123,11 @@ export async function resolveLyrics(t: AnyTrack): Promise<ResolvedLyrics | null>
 
   /* 1 — the sidecar copy: offline forever once anything else has hit. */
   if (folder) {
-    const text = await folder.backend.readSidecarText(sidecarLyricsRel(t));
+    let text = await folder.backend.readSidecarText(sidecarLyricsRel(t));
+    if (!text) {
+      const legacy = legacyLyricsRel(t);
+      if (legacy) text = await folder.backend.readSidecarText(legacy);
+    }
     if (text) {
       const lines = parseLrc(text);
       if (lines.length) result = { lines: lines, synced: isSynced(lines), source: 'sidecar', raw: text };
@@ -144,8 +155,9 @@ export async function resolveLyrics(t: AnyTrack): Promise<ResolvedLyrics | null>
   }
 
   /* 4 — LRCLIB, once; the catch is inside fetchLrclib so offline is a
-     quiet miss, not an error. What arrives is written to the sidecar. */
-  if (!result && t.title && t.artist) {
+     quiet miss, not an error. What arrives is written to the sidecar.
+     'Local sources only' stops the chain here. */
+  if (!result && t.title && t.artist && S.lyricsSource === 'auto') {
     const text = await fetchLrclib(t);
     if (text) {
       const lines = parseLrc(text);

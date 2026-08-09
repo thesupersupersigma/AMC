@@ -33,6 +33,8 @@ import { wireSearch } from './ui/search';
 import { wireSplitEditor, wireWaveform } from './ui/waveform';
 import { openAiRepair, wireRepair } from './ui/repair';
 import { wireLyrics } from './ui/lyrics';
+import { wireSettings } from './ui/settings';
+import { wireNowPlaying } from './ui/nowplaying';
 
 /* =========================================================================
    Keyboard
@@ -173,6 +175,9 @@ async function boot(): Promise<void> {
   $('#addFolderBtn').addEventListener('click', addFolderViaPicker);
   $('#rescanBtn').addEventListener('click', rescanLibrary);
   $('#repairBtn').addEventListener('click', openAiRepair);
+  $('#settingsBtn').addEventListener('click', () => {
+    navTo('settings');
+  });
   $<HTMLInputElement>('#picker').addEventListener('change', (e) => {
     const files = (e.target as HTMLInputElement).files;
     if (files && files.length) void addWebkitFolder(files);
@@ -200,6 +205,8 @@ async function boot(): Promise<void> {
   wireSplitEditor();
   wireRepair();
   wireLyrics();
+  wireSettings();
+  wireNowPlaying();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();

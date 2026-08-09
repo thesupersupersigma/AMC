@@ -78,8 +78,22 @@ export class WebkitDirBackend implements FsBackend {
     return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not written)'));
   }
 
+  listSidecarTree(relPath: string): Promise<string[]> {
+    const prefix = relPath ? relPath.replace(/\/+$/, '') + '/' : '';
+    const out: string[] = [];
+    this.sidecar.forEach((_f, rel) => {
+      if (rel.indexOf(prefix) === 0 && rel.length > prefix.length) out.push(rel.slice(prefix.length));
+    });
+    out.sort();
+    return Promise.resolve(out);
+  }
+
   writeSidecarBlob(relPath: string): Promise<void> {
     return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not written)'));
+  }
+
+  removeSidecarDir(relPath: string): Promise<void> {
+    return Promise.reject(new Error('This folder is read-only in this browser (' + relPath + ' not removed)'));
   }
 
   removeSidecarFile(relPath: string): Promise<void> {

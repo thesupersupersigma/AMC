@@ -12,6 +12,7 @@ import { songTable, sortTracks, clearSelection, setSelectionUI, handleRowSelect,
 import type { PlaylistEntry } from '../types';
 import { playList, toggleShuffle, syncPlayerUI } from './player';
 import { openCatalogReview } from './repair';
+import { fillStorageInfo, viewSettings } from './settings';
 import { closeMenu, openRowMenu } from './menu';
 import { isMissingTrack } from '../state';
 import type { SortCol } from '../types';
@@ -95,6 +96,9 @@ function renderMain(): void {
   } else if (base === 'playlist') {
     crumb = 'Playlists';
     h = viewPlaylist(arg);
+  } else if (base === 'settings') {
+    crumb = 'Settings';
+    h = viewSettings();
   }
   $('#crumb').textContent = crumb;
   /* Keep the reading position across re-renders (a track change repaints the
@@ -103,6 +107,7 @@ function renderMain(): void {
   box.innerHTML = h;
   box.scrollTop = keep;
   lastRenderedView = S.view;
+  if (base === 'settings') fillStorageInfo();
 }
 
 /* ---------- drag state shared between the view and the sidebar ---------- */

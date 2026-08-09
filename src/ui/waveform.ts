@@ -64,17 +64,32 @@ function draw(): void {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
   const havePeaks = !!(curPeaks && curPeaks.pairs.length);
   if (!curDuration || (!havePeaks && !markers.length)) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     canvas.classList.remove('has-wave');
     return;
   }
   canvas.classList.add('has-wave');
+  paintWave(ctx, canvas.width, canvas.height);
+}
+
+/** Renders the current track's wave into ANY canvas — the player pill and
+    the full-screen Now Playing share one painter and one state. */
+export function paintWaveInto(cv: HTMLCanvasElement): void {
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!curDuration) return;
+  paintWave(ctx, cv.width, cv.height);
+}
+
+function paintWave(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.clearRect(0, 0, w, h);
+  const havePeaks = !!(curPeaks && curPeaks.pairs.length);
+  if (!curDuration || (!havePeaks && !markers.length)) return;
   const mid = h / 2;
-  const playedX = progressX();
+  const playedX = progressXFor(w);
 
   if (havePeaks) {
     const pairs = (curPeaks as PeakData).pairs;
@@ -118,13 +133,16 @@ function draw(): void {
   }
 }
 
-function progressX(): number {
-  if (!canvas || !curDuration) return -1;
+function progressXFor(w: number): number {
+  if (!curDuration) return -1;
   const c = S.current;
   if (!c) return -1;
   const key = refOf(c.folderId, c.kind === 'virtual' ? c.sourcePath : c.path);
   if (key !== curKey) return -1;
-  return (Math.max(0, audio.currentTime || 0) / curDuration) * canvas.width;
+  return (Math.max(0, audio.currentTime || 0) / curDuration) * w;
+}
+function progressX(): number {
+  return canvas ? progressXFor(canvas.width) : -1;
 }
 
 /** Cheap per-frame update: repaints only when the playhead moved a pixel. */

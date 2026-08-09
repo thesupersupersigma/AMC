@@ -10,7 +10,7 @@
 import type { AnyTrack, ConnectedFolder, Override, OverrideAlbums, OverrideRows, OverridesRec, SidecarOverrides } from '../types';
 import { SCHEMA_VERSION, S, haveCover, refOf, setCoverLocal, storeCover } from '../state';
 import { ST_OVERRIDES, idbGet, idbPut } from '../db/idb';
-import { queueSidecarWrite, stripRoot } from './amcdir';
+import { legacyCueKey, queueSidecarWrite, stableTrackKey, stripRoot } from './amcdir';
 import { logErr } from '../ui/log';
 
 interface FolderOverrides {
@@ -90,7 +90,10 @@ function persist(folder: ConnectedFolder): void {
 export function applyOverrideToTrack(t: AnyTrack): void {
   const f = byFolder.get(t.folderId);
   if (!f) return;
-  const row = f.rows[stripRoot(t.path)];
+  /* Stable key first; the v2 ordinal key answers only for folders that
+     could not be migrated (read-only), never for new writes. */
+  const legacy = legacyCueKey(t);
+  const row = f.rows[stableTrackKey(t)] || (legacy ? f.rows[legacy] : undefined);
   if (!row || !row.fields) return;
   const fields = row.fields;
   if (fields.title != null) t.title = fields.title;
@@ -115,7 +118,8 @@ export function recordOverrides(folder: ConnectedFolder, patches: Array<{ path: 
   const f = emptyFor(folder.folderId);
   const now = Date.now();
   for (const p of patches) {
-    const rel = stripRoot(p.path);
+    const live0 = S.byRef[refOf(folder.folderId, p.path)];
+    const rel = live0 ? stableTrackKey(live0) : stripRoot(p.path);
     const prior = f.rows[rel];
     f.rows[rel] = {
       fields: prior ? { ...prior.fields, ...p.fields } : { ...p.fields },
@@ -126,6 +130,28 @@ export function recordOverrides(folder: ConnectedFolder, patches: Array<{ path: 
     if (live) applyOverrideToTrack(live);
   }
   persist(folder);
+}
+
+/** v2→v3 migration: renames ordinal `#cueNN` rows to their stable keys.
+    Returns how many rows moved; persists (journal + sidecar) when any did. */
+export function rekeyOverrideRows(folder: ConnectedFolder, map: Map<string, string>): number {
+  const f = byFolder.get(folder.folderId);
+  if (!f) return 0;
+  let moved = 0;
+  for (const [oldKey, newKey] of map) {
+    const row = f.rows[oldKey];
+    if (!row) continue;
+    if (!f.rows[newKey]) f.rows[newKey] = row;
+    delete f.rows[oldKey];
+    moved++;
+  }
+  if (moved) persist(folder);
+  return moved;
+}
+
+export function overrideRowCount(folderId: string): number {
+  const f = byFolder.get(folderId);
+  return f ? Object.keys(f.rows).length : 0;
 }
 
 export function rememberAlbumCollection(folder: ConnectedFolder, albumKey: string, collectionId: number): void {

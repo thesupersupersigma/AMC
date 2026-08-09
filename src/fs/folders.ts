@@ -9,7 +9,8 @@
 
 import type { ConnectedFolder, FolderRec, Prefs } from '../types';
 import { S, setPrefsMirror } from '../state';
-import { ST_FOLDERS, idbAll, idbPut } from '../db/idb';
+import { ST_FOLDERS, idbAll, idbDel, idbPut } from '../db/idb';
+import { migrateFolderSidecar } from '../db/migrate';
 import { buildSettings, flushPendingWrites, queueSidecarWrite, readSettings } from './amcdir';
 import { FsaBackend, pickDirectory, queryFolderPermission, requestFolderPermission } from './fsa';
 import { WebkitDirBackend, pickFolder as pickWebkitFolder } from './webkitdir';
@@ -17,7 +18,7 @@ import { canUseFsa } from './adapter';
 import { logErr } from '../ui/log';
 import { esc, toast, uuid, $ } from '../util';
 import { render } from '../ui/render';
-import { enqueueFolderScan } from '../scan/scanner';
+import { enqueueFolderScan, reindexLibrary } from '../scan/scanner';
 import { reconcileFolderPlaylists } from '../ui/playlists';
 import { icon } from '../ui/icons';
 
@@ -190,13 +191,75 @@ async function connectFolder(rec: FolderRec, backend: ConnectedFolder['backend']
   const pi = pending.findIndex((p) => p.rec.folderId === folder.folderId);
   if (pi >= 0) pending.splice(pi, 1);
 
+  recOf.set(rec.folderId, rec);
   syncShell();
+  /* Schema check first: an older sidecar is backed up here and re-keyed
+     during the scan (the rename needs the parsed cue layout). */
+  await migrateFolderSidecar(folder);
   /* The sidecar is the source of truth: read its playlists and reconcile
      IndexedDB to them (the journal replays dirty rows the other way). */
   await reconcileFolderPlaylists(folder);
   await flushPendingWrites(folder.folderId);
   enqueueFolderScan(folder);
   return folder;
+}
+
+const recOf = new Map<string, FolderRec>();
+
+/* ---------- manage (Phase 5 settings) ---------- */
+
+/** Disconnects and forgets a folder. Its files and sidecar are untouched —
+    only AMC's registration goes. The library updates live. */
+export async function removeFolder(folderId: string): Promise<void> {
+  const i = connected.findIndex((f) => f.folderId === folderId);
+  const label = i >= 0 ? connected[i].label : folderLabel(folderId);
+  if (i >= 0) connected.splice(i, 1);
+  const pi = pending.findIndex((p) => p.rec.folderId === folderId);
+  if (pi >= 0) pending.splice(pi, 1);
+  recOf.delete(folderId);
+  try {
+    await idbDel(ST_FOLDERS, folderId);
+  } catch (e) {
+    logErr('folders', "Could not forget '" + label + "' from the registry", (e as Error).message);
+  }
+  if (S.current && S.current.folderId === folderId) {
+    /* The playing file belongs to the removed folder — stop cleanly. */
+    const audio = document.getElementById('audio') as HTMLAudioElement | null;
+    if (audio) audio.pause();
+    S.current = null;
+    S.playing = false;
+  }
+  S.tracks = S.tracks.filter((t) => t.folderId !== folderId);
+  S.queue = S.queue.filter((t) => t.folderId !== folderId);
+  S.baseQueue = S.baseQueue.filter((t) => t.folderId !== folderId);
+  if (S.qi >= S.queue.length) S.qi = S.queue.length - 1;
+  reindexLibrary();
+  syncShell();
+  render();
+  toast("Removed '" + label + "' — its files and sidecar were not touched");
+}
+
+/** Moves a folder up or down the priority order (duplicate resolution). */
+export async function reorderFolder(folderId: string, delta: -1 | 1): Promise<void> {
+  const list = connectedFolders();
+  const i = list.findIndex((f) => f.folderId === folderId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  const a = list[i];
+  const b = list[j];
+  const tmp = a.order;
+  a.order = b.order;
+  b.order = tmp;
+  for (const f of [a, b]) {
+    const rec = recOf.get(f.folderId);
+    if (rec) {
+      rec.order = f.order;
+      await persistFolderRec(rec);
+    }
+  }
+  /* Priority changed: duplicates may resolve to a different primary. */
+  reindexLibrary();
+  render();
 }
 
 /* ---------- add flows (user gesture) ---------- */

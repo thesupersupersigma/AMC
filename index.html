@@ -48,6 +48,10 @@
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
         Rescan library
       </button>
+      <button class="foot-btn" id="settingsBtn" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/></svg>
+        Settings
+      </button>
       <button class="foot-btn" id="repairBtn" type="button">
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 00-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 006-6l-2.9 2.9-2.1-2.1z"/></svg>
         Metadata repair
@@ -74,6 +78,8 @@
     <div id="view"></div>
   </main>
 </div>
+
+<div id="npview" hidden role="dialog" aria-label="Now Playing" aria-modal="true"></div>
 
 <div id="playerbar" hidden>
   <div class="pb-left">
@@ -178,6 +184,7 @@
 
 <input id="picker" type="file" webkitdirectory directory multiple hidden aria-hidden="true" tabindex="-1">
 <input id="m3upicker" type="file" accept=".m3u,.m3u8" hidden aria-hidden="true" tabindex="-1">
+<input id="zippicker" type="file" accept=".zip" hidden aria-hidden="true" tabindex="-1">
 <audio id="audio" preload="metadata"></audio>
 <audio id="probe" preload="metadata" muted></audio>
 

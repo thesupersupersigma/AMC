@@ -20,6 +20,7 @@ import { applyDedupe } from './dedupe';
 import { detectSplitFlags } from './detect';
 import { buildLibraryJson, queueSidecarWrite, stripRoot } from '../fs/amcdir';
 import { applyOverrideToTrack, loadFolderOverrides, restoreSidecarArtwork } from '../fs/overrides';
+import { finishFolderMigration, folderNeedsRekey } from '../db/migrate';
 import { registerSiblingLrcs } from '../net/lyrics';
 import { connectedFolders, folderOrder } from '../fs/folders';
 import { probe } from '../audio/engine';
@@ -179,8 +180,9 @@ export function resetLibrary(): void {
 }
 
 /** One finished index pass: merge duplicates across folders, rebuild,
-    re-flag unsplit-rip candidates. */
-function reindexLibrary(): void {
+    re-flag unsplit-rip candidates. Exported for folder remove/reorder,
+    which change dedupe priority without a rescan. */
+export function reindexLibrary(): void {
   /* Keep S.tracks in folder order so first-wins lookups follow priority. */
   S.tracks.sort((a, b) => folderOrder(a.folderId) - folderOrder(b.folderId) || a.path.localeCompare(b.path));
   applyDedupe(S.tracks, folderOrder);
@@ -581,6 +583,10 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
      and tags are in hand; claimed sources hide from the library views. */
   try {
     const virtuals = await attachCues(folder, scanned, cueFiles, recByPath);
+    /* A pending v3 migration re-keys overrides/lyrics now — the stable
+       keys need these virtuals' start times, and the override application
+       below must already read the renamed rows. */
+    if (folderNeedsRekey(folder.folderId)) await finishFolderMigration(folder, virtuals);
     for (const v of virtuals) {
       /* Overrides address virtual tracks by their own #cueNN path — that is
          how an AI answer names the tracks of a vinyl side. */

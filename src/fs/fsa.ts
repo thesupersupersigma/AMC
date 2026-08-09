@@ -215,6 +215,23 @@ export class FsaBackend implements FsBackend {
     await w.close();
   }
 
+  async listSidecarTree(relPath: string): Promise<string[]> {
+    const parts = relPath ? FsaBackend.splitRel(relPath) : [];
+    const dir = await this.sidecarDir(false, parts);
+    if (!dir) return [];
+    const out: string[] = [];
+    const walk = async (d: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<void> => {
+      if (depth > 10) return;
+      for await (const [name, handle] of d.entries()) {
+        if (handle.kind === 'file') out.push(prefix + name);
+        else await walk(handle as FileSystemDirectoryHandle, prefix + name + '/', depth + 1);
+      }
+    };
+    await walk(dir, '', 0);
+    out.sort();
+    return out;
+  }
+
   async writeSidecarBlob(relPath: string, blob: Blob): Promise<void> {
     const parts = FsaBackend.splitRel(relPath);
     const dir = await this.sidecarDir(true, parts.slice(0, -1));
@@ -240,6 +257,17 @@ export class FsaBackend implements FsBackend {
     if (!dir) return;
     try {
       await dir.removeEntry(parts[parts.length - 1]);
+    } catch (e) {
+      if ((e as DOMException).name !== 'NotFoundError') throw e;
+    }
+  }
+
+  async removeSidecarDir(relPath: string): Promise<void> {
+    const parts = FsaBackend.splitRel(relPath);
+    const dir = await this.sidecarDir(false, parts.slice(0, -1));
+    if (!dir) return;
+    try {
+      await dir.removeEntry(parts[parts.length - 1], { recursive: true });
     } catch (e) {
       if ((e as DOMException).name !== 'NotFoundError') throw e;
     }

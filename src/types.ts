@@ -251,6 +251,10 @@ export interface FsBackend {
   readSidecarBlob(relPath: string): Promise<Blob | null>;
   /** Names of files inside a .AMC/ subdirectory ('' for .AMC itself). */
   listSidecarDir(relPath: string): Promise<string[]>;
+  /** Every FILE under a .AMC/ subtree, as paths relative to relPath.
+      Missing directories are an empty list. Backups and exports walk this —
+      FSA has no directory copy. */
+  listSidecarTree(relPath: string): Promise<string[]>;
   /** Writes inside .AMC/ only; must throw on failure — a failed write is
       never treated as success. Read-only backends always throw. */
   writeSidecarText(relPath: string, text: string): Promise<void>;
@@ -258,6 +262,8 @@ export interface FsBackend {
   writeSidecarBlob(relPath: string, blob: Blob): Promise<void>;
   /** Removes a file inside .AMC/; missing files are not an error. */
   removeSidecarFile(relPath: string): Promise<void>;
+  /** Removes a whole directory inside .AMC/ (old backups). Missing is fine. */
+  removeSidecarDir(relPath: string): Promise<void>;
   /** Creates .AMC/ and its subdirectories. No-op on read-only backends. */
   ensureSidecarLayout(): Promise<void>;
 }
@@ -383,12 +389,19 @@ export interface CoverRec {
   thumb: Blob;
 }
 
+export type LyricsSource = 'auto' | 'local' | 'off';
+
 export interface Prefs {
   volume?: number;
   muted?: boolean;
   shuffle?: boolean;
   repeat?: string;
   view?: string;
+  /** Playback options (Phase 5 settings). */
+  gapless?: boolean;
+  crossfadeSec?: number;
+  accent?: string;
+  lyricsSource?: LyricsSource;
   /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
   /** Folder-qualified successor of lastPath. */
