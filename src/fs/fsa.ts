@@ -93,7 +93,7 @@ export class FsaBackend implements FsBackend {
       if (name.charAt(0) === '.' || name === AMC_DIR) continue;
       if (handle.kind === 'directory') {
         await this.walk(handle as FileSystemDirectoryHandle, prefix + '/' + name, out, depth + 1);
-      } else if (!isJunkFile(name) && (AUDIO_EXT.indexOf(extOf(name)) >= 0 || extOf(name) === 'cue')) {
+      } else if (!isJunkFile(name) && (AUDIO_EXT.indexOf(extOf(name)) >= 0 || extOf(name) === 'cue' || extOf(name) === 'lrc')) {
         try {
           const file = await (handle as FileSystemFileHandle).getFile();
           out.push({ path: prefix + '/' + name, file: file });

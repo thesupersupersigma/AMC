@@ -32,6 +32,7 @@ import { closeMenu, menuOpen, wireMenus } from './ui/menu';
 import { wireSearch } from './ui/search';
 import { wireSplitEditor, wireWaveform } from './ui/waveform';
 import { openAiRepair, wireRepair } from './ui/repair';
+import { wireLyrics } from './ui/lyrics';
 
 /* =========================================================================
    Keyboard
@@ -198,6 +199,7 @@ async function boot(): Promise<void> {
   wireWaveform();
   wireSplitEditor();
   wireRepair();
+  wireLyrics();
   syncVolumeUI();
   refreshLogUI();
   wireServiceWorkerUpdates();

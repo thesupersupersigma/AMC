@@ -5,7 +5,7 @@
    not milliseconds. Track end is the next INDEX 01; the last track's end is
    the file duration, filled in by the caller when it attaches the sheet. */
 
-import type { CueSheet, CueTrack } from '../types';
+import type { CueFileGroup, CueSheet, CueTrack } from '../types';
 
 const FRAMES_PER_SEC = 75;
 
@@ -29,12 +29,16 @@ function unquote(s: string): string {
 }
 
 /** Parses cue text into a sheet. Returns null when no usable TRACK/INDEX 01
-    entries exist. endSec of each track is the next track's INDEX 01; the
-    final track's endSec is left as 0 for the caller to fill with the file
-    duration. */
+    entries exist. A TRACK belongs to the FILE line preceding it, so a
+    per-track-file rip parses into one group per file while the classic
+    single-FILE image is one group. INDEX times restart at zero with every
+    FILE, so endSec chains within a group only; each group's final track is
+    left at 0 for the caller to fill with that file's duration. */
 export function parseCueText(text: string, source: CueSheet['source']): CueSheet | null {
   const lines = String(text).split(/\r?\n/);
-  const sheet: CueSheet = { file: '', tracks: [], source: source };
+  const sheet: CueSheet = { file: '', tracks: [], files: [], source: source };
+  const groups: CueFileGroup[] = [];
+  let group: CueFileGroup | null = null;
   let cur: CueTrack | null = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -47,13 +51,20 @@ export function parseCueText(text: string, source: CueSheet['source']): CueSheet
     if (cmd === 'FILE') {
       /* FILE "name" WAVE — the trailing type word is outside the quotes */
       const q = rest.match(/^"([^"]*)"/);
-      if (q) sheet.file = q[1];
-      else sheet.file = rest.split(/\s+/)[0] || '';
+      const name = q ? q[1] : rest.split(/\s+/)[0] || '';
+      group = { file: name, tracks: [] };
+      groups.push(group);
+      if (!sheet.file) sheet.file = name;
     } else if (cmd === 'TRACK') {
       const m = rest.match(/^(\d+)\s+AUDIO\b/i);
       if (m) {
         cur = { index: parseInt(m[1], 10), title: '', performer: '', startSec: -1, endSec: 0 };
-        sheet.tracks.push(cur);
+        if (!group) {
+          /* TRACK before any FILE — tolerated as one nameless group. */
+          group = { file: '', tracks: [] };
+          groups.push(group);
+        }
+        group.tracks.push(cur);
       } else {
         cur = null; /* data tracks are not audio */
       }
@@ -77,10 +88,16 @@ export function parseCueText(text: string, source: CueSheet['source']): CueSheet
     /* REM, CATALOG, ISRC, FLAGS, PREGAP, POSTGAP: ignored */
   }
 
-  /* Only tracks with a real INDEX 01 exist; ends chain to the next start. */
-  sheet.tracks = sheet.tracks.filter((t) => t.startSec >= 0);
-  sheet.tracks.sort((a, b) => a.startSec - b.startSec);
-  for (let i = 0; i < sheet.tracks.length - 1; i++) sheet.tracks[i].endSec = sheet.tracks[i + 1].startSec;
+  /* Only tracks with a real INDEX 01 exist; ends chain to the next start
+     WITHIN the group — the next file's times start over from zero. */
+  for (const g of groups) {
+    g.tracks = g.tracks.filter((t) => t.startSec >= 0);
+    g.tracks.sort((a, b) => a.startSec - b.startSec);
+    for (let i = 0; i < g.tracks.length - 1; i++) g.tracks[i].endSec = g.tracks[i + 1].startSec;
+  }
+  sheet.files = groups.filter((g) => g.tracks.length > 0);
+  sheet.tracks = [];
+  for (const g of sheet.files) for (const t of g.tracks) sheet.tracks.push(t);
   if (!sheet.tracks.length) return null;
   return sheet;
 }
@@ -98,7 +115,7 @@ export function sheetFromFlacCue(starts: number[], leadout: number | undefined, 
     endSec: i + 1 < sorted.length ? sorted[i + 1] : leadout || 0,
   }));
   if (!tracks.length) return null;
-  return { file: '', tracks: tracks, source: source };
+  return { file: '', tracks: tracks, files: [{ file: '', tracks: tracks }], source: source };
 }
 
 /** Serializes a sheet back to standard cue text — what the auto-split

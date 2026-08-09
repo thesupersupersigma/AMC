@@ -5,6 +5,7 @@ import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
 import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
 import { audio, createTrackURL, getLoadedSrcKey, revokeCurrentURL, setLoadedSrcKey } from '../audio/engine';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';
+import { lyricsTrackChanged } from './lyrics';
 import { ST_TRACKS, idbGet, idbPut } from '../db/idb';
 import { logErr } from './log';
 import { icon, solid, artHTML } from './icons';
@@ -155,6 +156,7 @@ function loadTrack(t: AnyTrack, autoplay: boolean): void {
   savePrefs();
   render();
   void waveformTrackChanged();
+  lyricsTrackChanged();
   startBoundaryLoop();
 }
 
@@ -209,6 +211,7 @@ function checkCueBoundary(c: VirtualTrack): void {
     updateMediaSession(nxt);
     savePrefs();
     void waveformTrackChanged();
+    lyricsTrackChanged();
     return;
   }
   audio.pause();
@@ -680,5 +683,6 @@ export function restoreLastTrack(): boolean {
   }
   updateMediaSession(t);
   void waveformTrackChanged();
+  lyricsTrackChanged();
   return true;
 }

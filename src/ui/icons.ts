@@ -31,6 +31,7 @@ const ICONS: Record<string, string> = {
   grip:     '<path d="M8.5 7h.01"/><path d="M8.5 12h.01"/><path d="M8.5 17h.01"/><path d="M15.5 7h.01"/><path d="M15.5 12h.01"/><path d="M15.5 17h.01"/>',
   folder:   '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
   playnext: '<path d="M3 6.5h11"/><path d="M3 12h8"/><path d="M3 17.5h8"/><path d="M15 9.4l6 3.4-6 3.4z"/>',
+  lyrics:   '<path d="M4 4.5h16a1 1 0 011 1v9.5a1 1 0 01-1 1h-7.6L8 20v-4H4a1 1 0 01-1-1V5.5a1 1 0 011-1z"/><path d="M7 8.5h10"/><path d="M7 11.8h6.5"/>',
   minus:    '<path d="M5 12h14"/>',
   sortup:   '<path d="M6 14l6-6 6 6"/>',
   sortdown: '<path d="M6 10l6 6 6-6"/>',

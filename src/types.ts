@@ -45,6 +45,9 @@ export interface Track {
       album's display artist/name are derived. Undefined on rows cached
       before this field existed. */
   tagged?: boolean;
+  /** LYRICS / UNSYNCEDLYRICS tag text captured at scan time — one of the
+      lyrics pane's sources. */
+  lyricsTag?: string;
   /** Set on a source file once a cue sheet carved it into VirtualTracks —
       the 42-minute blob must not show up alongside its own contents. Stays
       reachable through byRef/byUid. */
@@ -139,11 +142,20 @@ export interface CueTrack {
   pregapSec?: number;      // INDEX 00
 }
 
+/** One FILE line and the TRACKs that follow it. A cue with one group is
+    the classic image rip; per-track-file rips carry one group per file. */
+export interface CueFileGroup {
+  file: string;
+  tracks: CueTrack[];
+}
+
 export interface CueSheet {
-  file: string;            // the FILE line's audio file name
+  file: string;            // the first FILE line's audio file name
   title?: string;
   performer?: string;
-  tracks: CueTrack[];
+  tracks: CueTrack[];      // every audio track, in file-group order
+  /** Per-FILE groups. A TRACK belongs to the FILE line preceding it. */
+  files: CueFileGroup[];
   source: 'flac-block' | 'sibling' | 'sidecar' | 'vorbis-tag';
 }
 
@@ -331,6 +343,7 @@ export interface TrackRec {
   coverKey: string;
   codec?: string;
   tagged?: boolean;
+  lyricsTag?: string;
   /** FLAC CUESHEET metadata block (type 5), already converted to seconds.
       No titles — the block carries only boundaries. */
   flacCue?: { starts: number[]; leadout?: number };

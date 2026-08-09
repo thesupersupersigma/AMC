@@ -20,6 +20,7 @@ import { applyDedupe } from './dedupe';
 import { detectSplitFlags } from './detect';
 import { buildLibraryJson, queueSidecarWrite, stripRoot } from '../fs/amcdir';
 import { applyOverrideToTrack, loadFolderOverrides, restoreSidecarArtwork } from '../fs/overrides';
+import { registerSiblingLrcs } from '../net/lyrics';
 import { connectedFolders, folderOrder } from '../fs/folders';
 import { probe } from '../audio/engine';
 import type { CoverRec } from '../types';
@@ -60,8 +61,9 @@ function yearOf(s: string | undefined): string {
 /** Bumped whenever a parser fix changes what lands in the cache. Rows
     stamped with an older (or missing) version re-parse once and heal.
     2 = mdhd-preferred MP4 durations + grown moov reads + codec/tagged.
-    3 = FLAC CUESHEET block boundaries + embedded CUESHEET tag captured. */
-const PARSE_VERSION = 3;
+    3 = FLAC CUESHEET block boundaries + embedded CUESHEET tag captured.
+    4 = LYRICS/UNSYNCEDLYRICS tag captured for the lyrics pane. */
+const PARSE_VERSION = 4;
 
 /* ---------- one track ---------- */
 export async function parseTrack(file: File, key: string, path: string): Promise<{ rec: TrackRec; meta: ParsedMeta }> {
@@ -98,6 +100,9 @@ export async function parseTrack(file: File, key: string, path: string): Promise
     coverKey: '',
     codec: meta.codec,
     tagged: !!(t['TITLE'] || t['ARTIST'] || t['ALBUMARTIST'] || t['ALBUM']),
+    /* Lyrics ride in a tag on some rips; capped — a runaway tag must not
+       bloat the cache row. */
+    lyricsTag: (t['LYRICS'] || t['UNSYNCEDLYRICS'] || '').slice(0, 60000) || undefined,
     flacCue: meta.flacCue,
     cueText: t['CUESHEET'],
     pv: PARSE_VERSION,
@@ -154,6 +159,7 @@ export function recToTrack(rec: TrackRec, folderId: string, file?: File): FileTr
     edition: editionOf(rec.path, rec.album),
     codec: rec.codec,
     tagged: rec.tagged,
+    lyricsTag: rec.lyricsTag,
     error: '',
   };
 }
@@ -195,6 +201,12 @@ function baseNameOf(p: string): string {
 function dirNameOf(p: string): string {
   const i = p.lastIndexOf('/');
   return i < 0 ? '' : p.slice(0, i);
+}
+/** A cue FILE reference, normalised for matching: case-insensitive, both
+    path separators tolerated, any directory component ignored. */
+function cueFileKey(name: string): string {
+  const s = String(name).replace(/\\/g, '/');
+  return norm(s.slice(s.lastIndexOf('/') + 1));
 }
 
 function makeVirtual(src: FileTrack, ct: CueTrack, sheet: CueSheet): VirtualTrack {
@@ -291,11 +303,18 @@ async function attachCues(
       const s = sheetFromFlacCue(rec.flacCue.starts, rec.flacCue.leadout, 'flac-block');
       if (s) candidates.push({ sheet: s, source: 'flac-block' });
     }
+    /* A TRACK belongs to the FILE line preceding it: this file's candidate
+       is the GROUP naming it, not the whole sheet — a per-track-file cue
+       must never hand one file another file's track list. */
     const siblings = cuesByDir.get(dirNameOf(t.path)) || [];
     for (const c of siblings) {
       if (!c.sheet) continue;
-      if (norm(c.sheet.file) === norm(baseNameOf(t.path))) {
-        candidates.push({ sheet: c.sheet, source: 'sibling' });
+      const g = c.sheet.files.find((x) => cueFileKey(x.file) === cueFileKey(baseNameOf(t.path)));
+      if (g && g.tracks.length) {
+        candidates.push({
+          sheet: { file: g.file, title: c.sheet.title, performer: c.sheet.performer, tracks: g.tracks, files: [g], source: 'sibling' },
+          source: 'sibling',
+        });
         claimedCues.add(c.path);
         break;
       }
@@ -332,6 +351,7 @@ async function attachCues(
       title: (titles && titles.sheet.title) || boundaries.sheet.title,
       performer: (performers && performers.sheet.performer) || boundaries.sheet.performer,
       source: boundaries.source,
+      files: boundaries.sheet.files,
       tracks: boundaries.sheet.tracks.map((bt, i) => ({
         index: bt.index,
         startSec: bt.startSec,
@@ -345,7 +365,22 @@ async function attachCues(
     /* Ends resolve against the file duration; nonsense boundaries drop. */
     const dur = t.duration || 0;
     const usable = merged.tracks.filter((c) => c.startSec >= 0 && (dur === 0 || c.startSec < dur));
-    if (usable.length) {
+    if (usable.length === 1) {
+      /* One TRACK for this FILE: the file already is the track. The cue
+         entry is metadata — no virtual is carved and the file stays a
+         library row of its own. */
+      const ct = usable[0];
+      if (ct.title) t.title = ct.title;
+      const perf = ct.performer || merged.performer || '';
+      if (perf) t.artist = perf;
+      if (!t.tagged) {
+        if (merged.performer) t.albumArtist = merged.performer;
+        if (merged.title) t.album = merged.title;
+      }
+      if (!t.track && ct.index) t.track = ct.index;
+      t.tagged = t.tagged || !!ct.title;
+      logErr('cue', "Cue metadata applied to '" + baseNameOf(t.path) + "'", 'single-track FILE from ' + boundaries.source + ' — no split needed');
+    } else if (usable.length) {
       const last = usable[usable.length - 1];
       if (!last.endSec || (dur > 0 && last.endSec > dur)) last.endSec = dur;
       for (const c of usable) virtuals.push(makeVirtual(t, c, merged));
@@ -359,6 +394,20 @@ async function attachCues(
       t.cueError = 'The cue sheet has no usable tracks';
     }
   }
+
+  /* FILE lines naming files that are not present: skipped with a log
+     line, never an error — half of a per-track cue can still be right. */
+  cuesByDir.forEach((group, dir) => {
+    const present = new Set(fileTracks.filter((t) => dirNameOf(t.path) === dir).map((t) => cueFileKey(baseNameOf(t.path))));
+    for (const c of group) {
+      if (!c.sheet) continue;
+      for (const g of c.sheet.files) {
+        if (g.file && !present.has(cueFileKey(g.file))) {
+          logErr('cue', "FILE '" + g.file + "' in '" + baseNameOf(c.path) + "' is not in this folder — skipped", '');
+        }
+      }
+    }
+  });
 
   /* Cues that parsed but claimed nothing, or failed to parse: badge the
      audio file they most plausibly belong to. */
@@ -399,8 +448,10 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
      already merged when rows first appear. */
   await loadFolderOverrides(folder);
   const listed = await folder.backend.listScanFiles();
-  const files = listed.filter((f) => extOf(f.path) !== 'cue');
+  const files = listed.filter((f) => extOf(f.path) !== 'cue' && extOf(f.path) !== 'lrc');
   const cueFiles = listed.filter((f) => extOf(f.path) === 'cue');
+  /* Sibling .lrc files are a lyrics source, never library rows. */
+  registerSiblingLrcs(folder.folderId, listed.filter((f) => extOf(f.path) === 'lrc'));
   /* Replace only this folder's rows; other folders keep playing. */
   S.tracks = S.tracks.filter((t) => t.folderId !== folder.folderId);
 
@@ -538,6 +589,9 @@ async function scanFolder(folder: ConnectedFolder): Promise<void> {
       S.byRef[refOf(v.folderId, v.path)] = v;
       S.byUid[v.uid] = v;
     }
+    /* Single-track cue entries retitle file rows during attachment; an
+       accepted override must still win over what the cue says. */
+    for (const t of scanned) applyOverrideToTrack(t);
   } catch (e) {
     logErr('cue', "Cue attachment failed for '" + folder.label + "'", (e as Error) && (e as Error).message);
   }

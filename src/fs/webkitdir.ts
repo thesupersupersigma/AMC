@@ -37,7 +37,7 @@ export class WebkitDirBackend implements FsBackend {
         this.sidecar.set(path.slice(amc.index + amc[0].length), f);
         continue;
       }
-      if (isAudioFile(f) || (!isJunkFile(f.name) && extOf(f.name) === 'cue')) this.files.push({ path: path, file: f });
+      if (isAudioFile(f) || (!isJunkFile(f.name) && (extOf(f.name) === 'cue' || extOf(f.name) === 'lrc'))) this.files.push({ path: path, file: f });
     }
     this.label = root || 'Music';
     this.files.sort((a, b) => a.path.localeCompare(b.path));

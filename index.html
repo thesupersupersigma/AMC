@@ -99,6 +99,7 @@
     </div>
   </div>
   <div class="pb-right">
+    <button class="pb-btn" id="btnLyrics" type="button" title="Show lyrics" aria-label="Show lyrics"></button>
     <button class="pb-btn" id="btnQueue" type="button" title="Show what plays next" aria-label="Show what plays next"></button>
     <div class="volwrap">
       <button class="pb-btn" id="btnMute" type="button" title="Mute the audio" aria-label="Mute the audio"></button>
@@ -106,6 +107,16 @@
     </div>
   </div>
 </div>
+
+<aside id="lyricspanel" aria-label="Lyrics">
+  <header>
+    <h3 id="lyrTitle">Lyrics</h3>
+    <span class="lyr-src" id="lyrSource"></span>
+    <button class="pill-ghost" id="lyrEdit" type="button" title="Paste and time lyrics by hand">Edit</button>
+    <button class="pb-btn" id="lyrClose" type="button" title="Hide lyrics" aria-label="Hide lyrics"></button>
+  </header>
+  <div id="lyrbody"></div>
+</aside>
 
 <aside id="upnext" aria-label="Up next">
   <header>
