@@ -10,7 +10,10 @@ import { passRateLimit, readLimited, sendProxied } from './_shared.js';
    allowed host. */
 
 const UPSTREAM = 'https://is1-ssl.mzstatic.com';
-const MAX_BODY_BYTES = 5 * 1048576;
+/* Vercel caps a function's response body at 4.5 MB (anything larger is a
+   413 FUNCTION_PAYLOAD_TOO_LARGE), so the cap sits just under it with room
+   for headers. The client steps down to a smaller size when this trips. */
+const MAX_BODY_BYTES = 4400000;
 const CACHE_SECONDS = 604800; /* covers art is immutable per URL */
 
 const ART_PATH = /^image\/[\w\-./%]{1,400}\.(jpe?g|png|webp)$/i;

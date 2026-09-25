@@ -46,12 +46,37 @@ export async function launch({ width = 1365, height = 611, reducedMotion = 'no-p
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, reducedMotion });
+  /* __mod(path) imports the exact module URL the app itself loaded (a dev
+     server that saw edits serves HMR-stamped URLs, and a bare path would
+     then be a second, disconnected module instance). */
+  await context.addInitScript(() => {
+    try {
+      performance.setResourceTimingBufferSize(10000);
+    } catch {
+      /* older engines */
+    }
+    window.__mod = (p) => {
+      const hit = performance
+        .getEntriesByType('resource')
+        .map((e) => e.name)
+        .filter((n) => {
+          try {
+            return new URL(n).pathname === p;
+          } catch {
+            return false;
+          }
+        });
+      return import(hit.length ? hit[hit.length - 1] : p);
+    };
+  });
   const page = await context.newPage();
   const errors = [];
   if (process.env.DEBUG_CONSOLE) page.on('console', (m) => console.log('[page]', m.text()));
   page.on('pageerror', (e) => errors.push(String(e && e.stack ? e.stack : e)));
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push('console: ' + m.text());
+    /* A deliberately stubbed 4xx/5xx shows up as a resource-load console
+       line; that is the test working, not the app failing. */
+    if (m.type() === 'error' && !/^Failed to load resource/.test(m.text())) errors.push('console: ' + m.text());
   });
   return { browser, context, page, errors };
 }
@@ -63,7 +88,7 @@ export async function loadLibrary(page, url, dir, expectTracks, expectAlbums = 4
   await page.goto(url);
   await page.waitForSelector('#picker', { state: 'attached' });
   await page.evaluate(async () => {
-    window.__st = await import('/src/state.ts');
+    window.__st = await window.__mod('/src/state.ts');
   });
   await page.setInputFiles('#picker', dir);
   await page.waitForFunction(
@@ -84,7 +109,7 @@ export async function loadLibrary(page, url, dir, expectTracks, expectAlbums = 4
 /** Albums by display name → key. */
 export async function albumKeys(page) {
   return page.evaluate(async () => {
-    const m = await import('/src/state.ts');
+    const m = await window.__mod('/src/state.ts');
     const out = {};
     for (const al of m.S.albums) out[al.album] = al.key;
     return out;

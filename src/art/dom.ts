@@ -33,7 +33,9 @@ function upgradeAll(): void {
 export function scheduleHeroUpgrade(): void {
   if (upgradeQueued) return;
   upgradeQueued = true;
-  requestAnimationFrame(upgradeAll);
+  /* A macrotask: the render that called us has reached the DOM by then
+     (and unlike rAF it still runs in a hidden tab). */
+  setTimeout(upgradeAll, 0);
 }
 
 /** The album header's art box: hero if held, else the thumb, else the

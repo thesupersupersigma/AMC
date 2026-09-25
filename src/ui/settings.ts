@@ -14,6 +14,7 @@ import { ST_COVERS, ST_TRACKS, idbClear } from '../db/idb';
 import { logErr } from './log';
 import { icon } from './icons';
 import { esc, plural, toast, $ } from '../util';
+import { artworkSectionHTML, wireArtworkSettings } from '../art/settings-ui'; // hires-art hook
 
 const ACCENTS = ['', '#fa243c', '#ff9f0a', '#30d158', '#0a84ff', '#bf5af2', '#ff375f'];
 const XFADES = [0, 3, 6, 9];
@@ -79,6 +80,8 @@ export function viewSettings(): string {
     h += '<button type="button" class="seg-btn' + (S.lyricsSource === v ? ' on' : '') + '" data-lyrsrc="' + v + '">' + label + '</button>';
   }
   h += '</div><span class="set-hint">“Local only” never calls LRCLIB — sidecar, sibling .lrc and tags still work</span></div></div>';
+
+  h += artworkSectionHTML(); // hires-art hook
 
   /* Storage */
   h += '<div class="set-sect"><h2>Storage</h2><div id="setStorage" class="set-hint">Measuring…</div><div class="set-row" id="setPersistRow" hidden><button type="button" class="pill-ghost set-small" data-set="persist">Request persistent storage</button><span class="set-hint">without it the browser may silently evict the saved folders and caches</span></div></div>';
@@ -306,6 +309,7 @@ async function importSidecarZip(folder: ConnectedFolder, file: File): Promise<vo
 let importTarget = '';
 
 export function wireSettings(): void {
+  wireArtworkSettings(); // hires-art hook
   const zipInput = $('#zippicker') as HTMLInputElement;
   zipInput.addEventListener('change', () => {
     const f = zipInput.files && zipInput.files[0];

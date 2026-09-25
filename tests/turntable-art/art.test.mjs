@@ -15,8 +15,8 @@ export async function run({ server, check }) {
 
     /* ---- hero size per level ---- */
     const sizes = await page.evaluate(async (k) => {
-      const st = await import('/src/state.ts');
-      const hero = await import('/src/art/hero.ts');
+      const st = await window.__mod('/src/state.ts');
+      const hero = await window.__mod('/src/art/hero.ts');
       const out = {};
       for (const q of ['low', 'standard', 'high', 'max']) {
         st.S.artQuality = q;
@@ -43,9 +43,9 @@ export async function run({ server, check }) {
 
     /* ---- original bytes reused (byte-identical to the embedded picture) ---- */
     const same = await page.evaluate(async (k) => {
-      const st = await import('/src/state.ts');
-      const hero = await import('/src/art/hero.ts');
-      const sc = await import('/src/scan/scanner.ts');
+      const st = await window.__mod('/src/state.ts');
+      const hero = await window.__mod('/src/art/hero.ts');
+      const sc = await window.__mod('/src/scan/scanner.ts');
       const b = await hero.heroFor(k.Beta);
       const t = st.S.albumMap[k.Beta].tracks[0];
       const emb = await sc.extractArt(t.file);
@@ -59,9 +59,9 @@ export async function run({ server, check }) {
 
     /* ---- thumb sized to the display ---- */
     const thumbs = await page.evaluate(async (k) => {
-      const st = await import('/src/state.ts');
-      const ts = await import('/src/art/thumbsize.ts');
-      const is = await import('/src/art/imgsize.ts');
+      const st = await window.__mod('/src/state.ts');
+      const ts = await window.__mod('/src/art/thumbsize.ts');
+      const is = await window.__mod('/src/art/imgsize.ts');
       const a = await is.imageSize(st.coverBlob(k.Alpha));
       const d = await is.imageSize(st.coverBlob(k['Delta Side A']));
       const tiles = Array.from(document.querySelectorAll('.tile .cover')).map((e) => e.clientWidth);
@@ -72,10 +72,10 @@ export async function run({ server, check }) {
 
     /* ---- migration: a legacy 300 px thumb is rebuilt when its source is read ---- */
     const mig = await page.evaluate(async (k) => {
-      const st = await import('/src/state.ts');
-      const hero = await import('/src/art/hero.ts');
-      const is = await import('/src/art/imgsize.ts');
-      const rs = await import('/src/art/resize.ts');
+      const st = await window.__mod('/src/state.ts');
+      const hero = await window.__mod('/src/art/hero.ts');
+      const is = await window.__mod('/src/art/imgsize.ts');
+      const rs = await window.__mod('/src/art/resize.ts');
       const legacy = await rs.downscaleBlob(st.coverBlob(k['Delta Side A']), 300, 'image/webp', 0.82);
       st.setCoverLocal(k['Delta Side A'], legacy.blob);
       hero.invalidateHero(k['Delta Side A']);
@@ -92,7 +92,7 @@ export async function run({ server, check }) {
 
     /* ---- hero sites ---- */
     await page.evaluate(async (k) => {
-      const r = await import('/src/ui/render.ts');
+      const r = await window.__mod('/src/ui/render.ts');
       r.navTo('album:' + k.Alpha);
     }, keys);
     await page.waitForFunction(() => {
@@ -106,8 +106,8 @@ export async function run({ server, check }) {
     check('album page header shows the hero (2000 px at High)', header && header[0] === 2000, header);
 
     await page.evaluate(async (k) => {
-      const st = await import('/src/state.ts');
-      const p = await import('/src/ui/player.ts');
+      const st = await window.__mod('/src/state.ts');
+      const p = await window.__mod('/src/ui/player.ts');
       p.playList(st.S.albumMap[k.Alpha].tracks, 0);
     }, keys);
     await page.waitForFunction(() => navigator.mediaSession.metadata && navigator.mediaSession.metadata.artwork.length && navigator.mediaSession.metadata.artwork[0].sizes === '2000x2000', null, { timeout: 15000 }).catch(() => null);
@@ -115,7 +115,7 @@ export async function run({ server, check }) {
     check('Media Session declares the hero’s real size', ms && ms[0] && ms[0].sizes === '2000x2000', ms);
 
     await page.evaluate(async () => {
-      const np = await import('/src/ui/nowplaying.ts');
+      const np = await window.__mod('/src/ui/nowplaying.ts');
       np.openNowPlaying();
     });
     await page.waitForFunction(() => {
@@ -126,7 +126,7 @@ export async function run({ server, check }) {
     check('Now Playing shows the hero', npw === 2000, npw);
 
     const held = await page.evaluate(async () => {
-      const hero = await import('/src/art/hero.ts');
+      const hero = await window.__mod('/src/art/hero.ts');
       return hero.heldHeroKeys();
     });
     check('at most two heroes held (playing + open page)', held.length <= 2, held);

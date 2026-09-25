@@ -1,0 +1,8 @@
+/* Turntable Now Playing mode and Settings › Artwork.
+   (One stylesheet for this branch's UI so the CSS entry carries one hook.) */
+
+/* ---------------- Settings › Artwork ---------------- */
+#setArtwork .set-seg{border-radius:12px}
+#setArtwork .seg-btn{border-radius:10px;text-align:center;line-height:1.25;padding:5px 13px}
+#setArtwork .set-artsz,#setArtwork .set-artest{display:block;font-size:10px;opacity:.72;font-weight:400}
+#setArtwork .set-artest:empty{display:none}

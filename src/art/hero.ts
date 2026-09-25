@@ -152,8 +152,21 @@ function albumFolderIds(key: string, t: AnyTrack | null): string[] {
   return ids;
 }
 
-/* The IndexedDB fallback (for folders whose sidecar is read-only) plugs in
-   here once the catalog path exists — gate 2. */
+/* The catalog path (catalogart.ts) plugs in here: the IndexedDB fallback
+   for folders whose sidecar is read-only, a listener for covers stored by
+   a catalog review, and a hook that lazily upgrades a catalog cover stored
+   below the current level. Registration, not imports, keeps the module
+   graph acyclic. */
+type StoredFn = (key: string, source: Blob) => void;
+const storedFns: StoredFn[] = [];
+export function onCoverStored(fn: StoredFn): void {
+  storedFns.push(fn);
+}
+let mintedHook: ((e: HeroArt) => void) | null = null;
+export function setHeroMintedHook(fn: (e: HeroArt) => void): void {
+  mintedHook = fn;
+}
+
 type ExtraSource = (key: string) => Promise<{ blob: Blob; source: HeroSource } | null>;
 let idbSource: ExtraSource | null = null;
 export function setHeroIdbSource(fn: ExtraSource): void {
@@ -255,7 +268,29 @@ async function mint(key: string, track: AnyTrack | null, q: ArtQuality): Promise
   if (old) revokeLater(old.url);
   held.set(key, entry);
   trimHeroes(key);
+  syncMediaSessionArt(entry);
+  if (mintedHook) {
+    try {
+      mintedHook(entry);
+    } catch {
+      /* an upgrade check must never break the hero */
+    }
+  }
   return entry;
+}
+
+/* A hero minted (or re-minted after an upgrade or a level change) for the
+   playing album replaces the Media Session artwork in place, with its real
+   size — the OS controls never keep a stale or revoked image. */
+function syncMediaSessionArt(e: HeroArt): void {
+  if (!S.current || S.current.coverKey !== e.key || !('mediaSession' in navigator)) return;
+  try {
+    const md = navigator.mediaSession.metadata;
+    if (!md || (md.artwork[0] && md.artwork[0].src === e.url)) return;
+    md.artwork = [{ src: e.url, sizes: e.w + 'x' + e.h, type: e.blob.type || 'image/jpeg' }];
+  } catch {
+    /* metadata not settable here — player.ts publishes on the next track */
+  }
 }
 
 /** The album's hero at the current quality — minted on first request,
@@ -316,6 +351,15 @@ export function setImgDecoded(img: HTMLImageElement, url: string): void {
 }
 
 setCoverHooks({
-  stored: (key) => invalidateHero(key),
+  stored: (key, source) => {
+    invalidateHero(key);
+    for (const fn of storedFns) {
+      try {
+        fn(key, source);
+      } catch {
+        /* listeners degrade on their own */
+      }
+    }
+  },
   release: () => releaseAllHeroes(),
 });

@@ -85,4 +85,8 @@ writeFileSync(join(delta, 'Delta Side A.cue'), [
   '  TRACK 03 AUDIO', '    TITLE "Delta Three"', '    INDEX 01 08:00:00',
   '',
 ].join('\r\n'));
+/* Stub catalog artwork, served by the tests in place of /api/itunes/art. */
+const cat = join(out, 'catalog');
+mkdirSync(cat, { recursive: true });
+for (const px of [600, 1200, 2000, 2400, 3000]) cover(join(cat, `art-${px}.jpg`), px, '0x264653', '0xe9c46a');
 console.log('fixtures in', root);
