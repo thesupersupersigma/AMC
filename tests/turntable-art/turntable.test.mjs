@@ -92,6 +92,9 @@ export async function run({ server, check }) {
         await dragToSeek({ page, keys, check });
         await swaps({ page, keys, check });
         await speedAndBrake({ page, keys, check });
+        await playerBar({ page, keys, check });
+        await deckControls({ page, keys, check });
+        await shiftSnap({ page, keys, check });
       }
       check(`[${width}] no uncaught page errors`, errors.length === 0, errors.slice(0, 3));
     } finally {
@@ -174,14 +177,14 @@ async function speedAndBrake({ page, keys, check }) {
       return orig(s);
     };
   });
-  await page.click('[data-rpm="45"]');
+  await page.click('.tt-presets [data-rpm="45"]');
   await page.waitForTimeout(200);
   const r45 = await rateState(page);
   check('45 RPM → rate 45/33⅓ = 1.35, pitch not preserved', Math.abs(r45.rate - 1.35) < 0.001 && Math.abs(r45.def - 1.35) < 0.001 && r45.pitch === false, r45);
   check('Media Session position state reports the real playback rate', Math.abs(r45.ms - 1.35) < 0.001, r45.ms);
   const s45 = await sample(page, 1000);
   check('platter at 45 RPM turns ≈ 270°/s (still time-driven)', Math.abs(s45.degPerSec - 270) < 15, s45.degPerSec);
-  await page.click('[data-rpm="78"]');
+  await page.click('.tt-presets [data-rpm="78"]');
   const r78 = await rateState(page);
   await page.$eval('#ttRpm', (el) => {
     el.value = '16';
@@ -193,20 +196,25 @@ async function speedAndBrake({ page, keys, check }) {
   const rr = await rateState(page);
   check('“↺ 33⅓” resets to 1×', Math.abs(rr.rate - 1) < 1e-6 && Math.abs(rr.pref - 100 / 3) < 0.01, rr);
 
-  await page.click('[data-rpm="45"]');
+  await page.click('.tt-presets [data-rpm="32"]');
+  const r32 = await rateState(page);
+  check('32 RPM preset → 32/33⅓ = 0.96×', Math.abs(r32.rate - 0.96) < 0.001 && r32.pitch === false, r32.rate);
+  await page.click('.tt-presets [data-rpm="45"]');
   await page.click('#npMode'); /* leave turntable mode → Cover */
   await page.waitForTimeout(150);
   const cov = await rateState(page);
-  check('leaving turntable mode resets playback to 1× (pitch preserved again)', cov.rate === 1 && cov.def === 1 && cov.pitch === true, cov);
-  check('…while the chosen speed stays saved', Math.abs(cov.pref - 45) < 0.01, cov.pref);
+  const covRow = await page.evaluate(() => ({ speed: getComputedStyle(document.getElementById('ttSpeed')).display, brake: getComputedStyle(document.querySelector('.tt-brake')).display, read: document.getElementById('ttRpmRead').textContent }));
+  check('leaving turntable mode keeps the chosen speed (45 RPM stays 1.35×)', Math.abs(cov.rate - 1.35) < 0.001 && cov.pitch === false && Math.abs(cov.pref - 45) < 0.01, cov);
+  check('Cover mode shows the speed row too (without the deck-only stop/start switch)', covRow.speed === 'flex' && covRow.brake === 'none' && /^45 RPM/.test(covRow.read), covRow);
   await page.click('#npMode');
   await page.waitForTimeout(150);
   const back = await rateState(page);
-  check('re-entering turntable mode applies the saved speed again', Math.abs(back.rate - 1.35) < 0.001, back.rate);
+  check('back in turntable mode: still 45', Math.abs(back.rate - 1.35) < 0.001, back.rate);
   await page.evaluate(async () => (await window.__mod('/src/ui/nowplaying.ts')).closeNowPlaying());
   await page.waitForTimeout(350);
   const closed = await rateState(page);
-  check('closing Now Playing from turntable mode resets to 1× too', closed.rate === 1 && closed.pitch === true, closed);
+  const bar = await page.evaluate(() => ({ badge: document.querySelector('#btnSpeed b').textContent, on: document.getElementById('btnSpeed').classList.contains('on'), range: document.getElementById('spdRange').value }));
+  check('minimising Now Playing keeps the speed too; the player bar shows it', Math.abs(closed.rate - 1.35) < 0.001 && bar.badge === '45' && bar.on && Number(bar.range) === 45, { closed, bar });
 
   /* The brake: Space (the app's keyboard shortcut) in turntable mode. */
   await openTurntable(page, keys, 'Alpha', 0);
@@ -271,6 +279,121 @@ async function speedAndBrake({ page, keys, check }) {
   check('outside turntable mode pause is instant (no brake)', inst === true, inst);
   await page.evaluate(async () => (await window.__mod('/src/ui/nowplaying.ts')).closeNowPlaying());
   await page.waitForTimeout(350);
+}
+
+/* ---------- follow-up: player bar, deck controls, Shift snapping ---------- */
+
+async function playerBar({ page, keys, check }) {
+  await page.evaluate(async (k) => {
+    const np = await window.__mod('/src/ui/nowplaying.ts');
+    if (np.nowPlayingOpen()) np.closeNowPlaying();
+    (await window.__mod('/src/ui/player.ts')).playList(window.__st.S.albumMap[k.Alpha].tracks, 0);
+  }, keys);
+  await page.waitForTimeout(700);
+  const lay = await page.evaluate(() => {
+    const r = (el) => el.getBoundingClientRect();
+    const times = [...document.querySelectorAll('.pb-scrub .tt')];
+    return { times: times.map((e) => [getComputedStyle(e).display, e.textContent]), wrap: Math.round(r(document.querySelector('.scrubwrap')).width), grid: Math.round(r(document.querySelector('.pb-scrub')).width) };
+  });
+  check('player bar: elapsed/remaining times show and the waveform spans the middle column', lay.times.every((t) => t[0] !== 'none' && /\d:\d\d/.test(t[1])) && lay.wrap > lay.grid - 90, lay);
+  await page.$eval('#spdRange', (el) => {
+    el.value = '44.7';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const a = await rateState(page);
+  const badge = await page.$eval('#btnSpeed b', (b) => b.textContent);
+  check('player-bar speed slider sets the speed (snapping onto 45)', Math.abs(a.rate - 1.35) < 0.001 && badge === '45', { rate: a.rate, badge });
+  await page.click('#btnSpeed');
+  const b = await rateState(page);
+  await page.click('#btnSpeed');
+  const c = await rateState(page);
+  check('player-bar speed button: normal speed, then back to the chosen one', b.rate === 1 && Math.abs(c.rate - 1.35) < 0.001, [b.rate, c.rate]);
+  await page.click('#btnSpeed'); /* leave it at 33⅓ */
+}
+
+async function deckControls({ page, keys, check }) {
+  await openTurntable(page, keys, 'Alpha', 0);
+  const marks = await page.evaluate(() => ({ labels: [...document.querySelectorAll('.tt-mark')].map((e) => e.textContent), led: document.getElementById('ttLed').textContent, ticks: document.querySelectorAll('.tt-tick').length }));
+  check('pitch fader has a numbered RPM scale and a readout', ['78', '60', '45', '33⅓', '32', '16'].every((l) => marks.labels.includes(l)) && marks.led === '33⅓' && marks.ticks > 30, marks);
+  await page.click('.tt-rpm45');
+  const r45 = await rateState(page);
+  const led45 = await page.$eval('#ttLed', (e) => e.textContent);
+  await page.click('.tt-rpm33');
+  const r33 = await rateState(page);
+  check('the deck’s 33 / 45 buttons set the speed (readout follows)', Math.abs(r45.rate - 1.35) < 0.001 && led45 === '45' && r33.rate === 1, [r45.rate, led45, r33.rate]);
+  /* drag the fader knob to the top: 78 */
+  const geo = await page.evaluate(() => {
+    const k = document.getElementById('ttFaderKnob').getBoundingClientRect();
+    const t = document.getElementById('ttFader').getBoundingClientRect();
+    return { kx: k.left + k.width / 2, ky: k.top + k.height / 2, top: t.top, bottom: t.bottom };
+  });
+  await page.mouse.move(geo.kx, geo.ky);
+  await page.mouse.down();
+  await page.mouse.move(geo.kx, geo.top - 20, { steps: 6 });
+  await page.mouse.up();
+  const top = await rateState(page);
+  /* and down to where 45 sits — it snaps */
+  const y45 = geo.bottom - ((45 - 16) / 62) * (geo.bottom - geo.top) + 2;
+  await page.mouse.move(geo.kx, geo.top + 4);
+  await page.mouse.down();
+  await page.mouse.move(geo.kx, y45, { steps: 6 });
+  await page.mouse.up();
+  const mid = await rateState(page);
+  check('dragging the pitch fader changes the speed (top = 78, snaps onto 45)', Math.abs(top.pref - 78) < 0.01 && Math.abs(mid.pref - 45) < 0.01 && Math.abs(mid.rate - 1.35) < 0.001, [top.pref, mid.pref]);
+  const vol0 = await page.evaluate(() => window.__st.S.volume);
+  await page.focus('#ttFaderKnob');
+  await page.keyboard.press('ArrowUp');
+  const kb = await rateState(page);
+  const vol1 = await page.evaluate(() => window.__st.S.volume);
+  check('fader knob keys: ↑ is +½ RPM (and does not touch the volume)', Math.abs(kb.pref - 45.5) < 0.01 && vol0 === vol1, [kb.pref, vol0, vol1]);
+  await page.click('#ttRpmReset');
+  /* START·STOP: brakes to a stop, then starts again */
+  await page.evaluate(async () => (await window.__mod('/src/ui/turntable/speed.ts')).setBrake(true));
+  await page.click('#ttStart');
+  await page.waitForTimeout(300);
+  const braking = await page.evaluate(() => ({ paused: document.getElementById('audio').paused, rate: document.getElementById('audio').playbackRate }));
+  await page.waitForTimeout(800);
+  const stopped = await page.evaluate(() => document.getElementById('audio').paused);
+  await page.click('#ttStart');
+  await page.waitForTimeout(600);
+  const going = await page.evaluate(() => ({ paused: document.getElementById('audio').paused, rate: document.getElementById('audio').playbackRate }));
+  check('START·STOP stops the record (with the brake) and starts it again', !braking.paused && braking.rate < 1 && stopped && !going.paused && going.rate === 1, { braking, stopped, going });
+}
+
+async function shiftDrag(page, targetFrac, shift) {
+  const geo = await headGeometry(page);
+  const armNow = await page.evaluate(async () => (await window.__mod('/src/ui/turntable/motion.ts')).currentArmAngle());
+  const [x, y] = pointFor(geo, armNow, geo.outer + (geo.inner - geo.outer) * targetFrac);
+  if (shift) await page.keyboard.down('Shift');
+  await page.mouse.move(geo.head[0], geo.head[1]);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(geo.head[0] + ((x - geo.head[0]) * i) / 8, geo.head[1] + ((y - geo.head[1]) * i) / 8);
+  const label = await page.evaluate(() => ({ text: document.getElementById('ttSnap').textContent, shown: !document.getElementById('ttSnap').hidden, albumBands: document.querySelectorAll('#ttBands.tt-bands-album i').length }));
+  await page.mouse.up();
+  if (shift) await page.keyboard.up('Shift');
+  await page.waitForTimeout(700);
+  const after = await page.evaluate(async () => {
+    const pb = await window.__mod('/src/ui/turntable/playback.ts');
+    return { t: pb.getTime(), title: window.__st.S.current.title, label: !document.getElementById('ttSnap').hidden };
+  });
+  return { label, after };
+}
+
+async function shiftSnap({ page, keys, check }) {
+  /* a cue side: Shift snaps the needle to where each song starts */
+  await openTurntable(page, keys, 'Delta Side A', 0);
+  await page.waitForTimeout(900);
+  const cue = await shiftDrag(page, 468 / 720, true);
+  check('cue side: Shift-drag snaps to the start of the nearest song (Delta Three at 8:00)', Math.abs(cue.after.t - 480) < 1 && cue.after.title === 'Delta Three' && /^3 · Delta Three/.test(cue.label.text), cue);
+  const free = await shiftDrag(page, 300 / 720, false);
+  check('cue side without Shift: free seek across the side (lands mid-song, label shows the song and time)', Math.abs(free.after.t - 300) < 8 && free.after.title === 'Delta Two' && /^Delta Two · \d:\d\d/.test(free.label.text), free);
+  /* a normal album: Shift turns the record into the whole album */
+  await openTurntable(page, keys, 'Alpha', 0);
+  await page.waitForTimeout(900);
+  const alb = await shiftDrag(page, 0.7, true);
+  check('album: Shift-drag snaps across the album’s songs and plays the chosen one from its start', alb.after.title === 'Alpha Song 3' && alb.after.t < 2 && alb.label.albumBands === 2 && /^3 · Alpha Song 3/.test(alb.label.text) && !alb.after.label, alb);
+  const plain = await shiftDrag(page, 0.5, false);
+  check('album without Shift: the arm seeks within the song', plain.after.title === 'Alpha Song 3' && Math.abs(plain.after.t - 20) < 2 && /^0:\d\d \/ 0:40/.test(plain.label.text), plain);
 }
 
 /* ---------- gate 4: spin and tonearm ---------- */

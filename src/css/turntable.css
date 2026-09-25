@@ -13,10 +13,10 @@
    the view out in a row: deck left, title/controls/speed right. */
 .np-mode svg{width:20px;height:20px}
 .np-mode[aria-pressed="true"]{color:var(--accent)}
-.tt,.tt-speed{display:none}
+/* .tt-deck, not .tt: the player bar's time labels already use .tt */
+.tt-deck{display:none}
 #npview.np-tt .np-art,#npview.np-tt .np-scrub{display:none}
-#npview.np-tt .tt{display:block}
-#npview.np-tt .tt-speed{display:flex}
+#npview.np-tt .tt-deck{display:block}
 #npview.np-tt .np-inner{flex-direction:row;gap:clamp(20px,3vw,48px);padding:24px clamp(20px,2.4vw,40px)}
 #npview.np-tt .np-side{width:clamp(300px,24vw,380px);align-items:stretch;flex:0 0 auto}
 #npview.np-tt .np-title,#npview.np-tt .np-artist{text-align:left}
@@ -34,7 +34,7 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
    A fixed-aspect box sized by the viewport; everything inside is placed
    in stage units (1500 × 760) through container query units, so the
    drawing scales as one piece. */
-.tt{flex:0 1 auto;min-width:0}
+.tt-deck{flex:0 1 auto;min-width:0}
 .tt-stage{
   position:relative;container-type:size;
   width:min(calc(100vw - var(--lyr,0px) - clamp(300px,24vw,380px) - clamp(20px,3vw,48px) - 2 * clamp(20px,2.4vw,40px)), calc((100vh - 48px) * 1500 / 760), 1400px);
@@ -61,23 +61,65 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
   background:#3a0d12;box-shadow:inset 0 0 calc(2 * var(--u)) rgba(0,0,0,.6);transition:background .3s ease,box-shadow .3s ease;
 }
 #npview.tt-playing .tt-lamp{background:var(--accent);box-shadow:0 0 calc(10 * var(--u)) var(--accent)}
-.tt-startbtn{
-  left:calc(26 * var(--u));bottom:calc(26 * var(--u));padding:calc(9 * var(--u)) calc(14 * var(--u));
-  border-radius:calc(8 * var(--u));background:linear-gradient(180deg,#2f2f33,#222225);
-  box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,255,255,.08),0 calc(2 * var(--u)) calc(4 * var(--u)) rgba(0,0,0,.5);
-  font-size:calc(13 * var(--u));letter-spacing:.12em;color:rgba(255,255,255,.38);font-weight:600;white-space:nowrap;
+/* START·STOP and the 33 / 45 buttons: they work (play/pause with the
+   stop/start effect, and the speed presets). */
+.tt-startbtn,.tt-rpmbtn{
+  bottom:calc(14 * var(--u));height:calc(32 * var(--u));
+  border-radius:calc(7 * var(--u));background:linear-gradient(180deg,#303034,#212124);
+  box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,255,255,.09),0 calc(3 * var(--u)) calc(5 * var(--u)) rgba(0,0,0,.55);
+  font-size:max(8px,calc(12.5 * var(--u)));letter-spacing:.1em;color:rgba(255,255,255,.5);font-weight:700;white-space:nowrap;
+  display:grid;place-items:center;cursor:pointer;transition:color .15s ease,box-shadow .15s ease,transform .08s ease;
 }
-.tt-pitch{
-  right:calc(40 * var(--u));bottom:calc(48 * var(--u));width:calc(22 * var(--u));height:calc(190 * var(--u));
-  border-radius:calc(11 * var(--u));background:#0e0e10;box-shadow:inset 0 calc(2 * var(--u)) calc(4 * var(--u)) rgba(0,0,0,.7);
+.tt-startbtn{left:calc(28 * var(--u));width:calc(142 * var(--u))}
+.tt-rpmbtn{width:calc(54 * var(--u));letter-spacing:.04em}
+.tt-rpm33{left:calc(186 * var(--u))}
+.tt-rpm45{left:calc(248 * var(--u))}
+.tt-startbtn:hover,.tt-rpmbtn:hover{color:rgba(255,255,255,.85)}
+.tt-startbtn:active,.tt-rpmbtn:active{transform:translateY(calc(1 * var(--u)));box-shadow:inset 0 calc(1 * var(--u)) calc(3 * var(--u)) rgba(0,0,0,.6)}
+.tt-rpmbtn.on{color:var(--accent);text-shadow:0 0 calc(8 * var(--u)) color-mix(in srgb,var(--accent) 70%,transparent)}
+#npview.tt-playing .tt-startbtn{color:rgba(255,255,255,.8)}
+
+/* The pitch: an RPM readout over a fader with a numbered scale. Faster is
+   up; the knob sits at --pitch-frac (0 = 16 RPM, 1 = 78 RPM). */
+.tt-ledbox{
+  left:calc(812 * var(--u));top:calc(254 * var(--u));width:calc(128 * var(--u));height:calc(46 * var(--u));
+  border-radius:calc(7 * var(--u));background:#0b0b0c;
+  box-shadow:inset 0 calc(2 * var(--u)) calc(5 * var(--u)) rgba(0,0,0,.8),0 calc(1 * var(--u)) 0 rgba(255,255,255,.06);
+  display:flex;align-items:baseline;justify-content:center;gap:calc(5 * var(--u));padding-top:calc(6 * var(--u));
 }
-.tt-pitch i{
-  position:absolute;left:calc(-9 * var(--u));right:calc(-9 * var(--u));height:calc(26 * var(--u));
-  top:calc((50% - 13 * var(--u)) + var(--pitch-off,0) * 82 * var(--u));
-  border-radius:calc(5 * var(--u));background:linear-gradient(180deg,#4a4a50,#2b2b2f);
-  box-shadow:0 calc(2 * var(--u)) calc(4 * var(--u)) rgba(0,0,0,.6),inset 0 calc(1 * var(--u)) 0 rgba(255,255,255,.14);
-  transition:top .25s ease;
+.tt-led{
+  font:700 max(10px,calc(26 * var(--u)))/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color:#ff5a4a;text-shadow:0 0 calc(8 * var(--u)) rgba(255,70,50,.75);font-variant-numeric:tabular-nums;
 }
+.tt-ledbox small{font:600 max(6px,calc(10 * var(--u)))/1 var(--font);color:rgba(255,90,74,.7);letter-spacing:.08em}
+.tt-pitchwrap{left:calc(810 * var(--u));top:calc(318 * var(--u));width:calc(130 * var(--u));height:calc(370 * var(--u))}
+.tt-pitchwrap > *{position:absolute}
+.tt-scale{left:0;right:0;top:calc(16 * var(--u));bottom:calc(16 * var(--u));pointer-events:none}
+.tt-scale > *{position:absolute}
+.tt-tick{left:calc(64 * var(--u));width:calc(10 * var(--u));height:calc(1.4 * var(--u));margin-top:calc(-.7 * var(--u));background:rgba(255,255,255,.22)}
+.tt-tick.tt-major{left:calc(56 * var(--u));width:calc(18 * var(--u));height:calc(2 * var(--u));margin-top:calc(-1 * var(--u));background:rgba(255,255,255,.55)}
+.tt-tick.tt-major.tt-r{left:calc(106 * var(--u));width:calc(14 * var(--u))}
+.tt-mark{
+  font:600 max(7px,calc(13 * var(--u)))/1 var(--font);color:rgba(255,255,255,.62);
+  transform:translateY(-50%);white-space:nowrap;letter-spacing:.02em;
+}
+.tt-mark.tt-l{right:calc(78 * var(--u));text-align:right}
+.tt-mark.tt-r{left:calc(124 * var(--u))}
+.tt-fader{left:calc(62 * var(--u));width:calc(56 * var(--u));top:calc(16 * var(--u));bottom:calc(16 * var(--u));cursor:ns-resize;touch-action:none}
+.tt-fader-track{
+  position:absolute;left:calc(18 * var(--u));width:calc(20 * var(--u));top:calc(-14 * var(--u));bottom:calc(-14 * var(--u));
+  border-radius:calc(10 * var(--u));background:#0d0d0f;box-shadow:inset 0 calc(2 * var(--u)) calc(4 * var(--u)) rgba(0,0,0,.75);
+}
+.tt-fader-knob{
+  position:absolute;left:calc(4 * var(--u));width:calc(48 * var(--u));height:calc(26 * var(--u));
+  top:calc((1 - var(--pitch-frac, .2796)) * 100% - 13 * var(--u));
+  border-radius:calc(5 * var(--u));background:linear-gradient(180deg,#5a5a61,#2c2c30);
+  box-shadow:0 calc(3 * var(--u)) calc(6 * var(--u)) rgba(0,0,0,.6),inset 0 calc(1 * var(--u)) 0 rgba(255,255,255,.18);
+  transition:top .2s ease;cursor:grab;outline-offset:calc(3 * var(--u));
+}
+.tt-fader-knob::after{content:"";position:absolute;left:12%;right:12%;top:50%;height:calc(2 * var(--u));margin-top:calc(-1 * var(--u));background:var(--accent);border-radius:calc(1 * var(--u))}
+.tt-fader-knob:focus-visible{outline:2px solid var(--accent)}
+#ttWorld.tt-fading .tt-fader-knob{transition:none;cursor:grabbing}
 
 /* ---------------- platter (rim with strobe dots, rubber mat) ---------------- */
 .tt-platter{
@@ -200,6 +242,8 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
   transition:transform .18s ease,box-shadow .18s ease;
 }
 .tt-head:focus-visible{outline:2px solid var(--accent)}
+/* held in the hand: the lift is the feedback, not a focus ring */
+#ttWorld.tt-lifted .tt-head{outline:none}
 .tt-cart{position:absolute;left:calc(34 * var(--u));top:calc(8 * var(--u));width:calc(34 * var(--u));height:calc(26 * var(--u));border-radius:calc(4 * var(--u));background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#000))}
 .tt-lift{position:absolute;right:calc(-18 * var(--u));top:calc(14 * var(--u));width:calc(24 * var(--u));height:calc(8 * var(--u));border-radius:calc(4 * var(--u));background:#b9babf}
 /* Lifted: the arm rises toward the viewer — a touch bigger, a longer
@@ -212,8 +256,27 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
   box-shadow:0 calc(3 * var(--u)) calc(8 * var(--u)) rgba(0,0,0,.6);
 }
 
-/* ---------------- speed control ---------------- */
-.tt-speed{flex-direction:column;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+/* ---------------- while the tonearm is held ----------------
+   Where the needle will land — a time, or (Shift) the song it snaps to. */
+.tt-snap{
+  z-index:9;transform:translate(calc(-100% - 22 * var(--u)),-50%);pointer-events:none;
+  background:rgba(18,18,20,.9);border:1px solid rgba(255,255,255,.08);border-radius:8px;
+  padding:5px 9px;font-size:12px;font-weight:600;color:#fff;white-space:nowrap;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);
+}
+.tt-snap small{display:block;font-size:10.5px;font-weight:500;color:rgba(255,255,255,.55);margin-top:1px}
+.tt-bands-album i{box-shadow:0 0 0 calc(2 * var(--u)) color-mix(in srgb,var(--accent) 55%,transparent),0 0 calc(10 * var(--u)) color-mix(in srgb,var(--accent) 35%,transparent)}
+
+/* ---------------- speed control ----------------
+   Speed is a playback setting, so the row shows in both modes: beside the
+   deck in turntable mode, one compact line under the transport in Cover
+   mode (the stop/start switch belongs to the deck). */
+.tt-speed{display:flex;flex-direction:column;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+#npview:not(.np-tt) .tt-speed{flex-direction:row;align-items:center;gap:10px;margin-top:6px;padding-top:0;border-top:0;width:100%}
+#npview:not(.np-tt) .tt-speed-row{flex-wrap:nowrap;order:0}
+#npview:not(.np-tt) .tt-speed input[type=range]{flex:1;min-width:80px}
+#npview:not(.np-tt) .tt-speed .tt-rpm-read{min-width:0}
+#npview:not(.np-tt) .tt-brake{display:none}
 .tt-speed-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .tt-presets{display:inline-flex;background:rgba(255,255,255,.08);border-radius:999px;padding:2px;gap:2px}
 .tt-presets .seg-btn{color:rgba(255,255,255,.7)}
@@ -231,3 +294,17 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
   #npview.np-tt .np-side{width:min(560px,92vw)}
   .tt-stage{width:min(calc(100vw - 32px), calc((100vh - 330px) * 1500 / 760))}
 }
+
+/* ---------------- the player bar's speed control ----------------
+   Beside the volume and built the same way: a button (click: normal
+   speed, click again: back to the chosen one) and a slider that opens on
+   hover. The badge shows the RPM whenever it is not 33⅓. */
+.spdwrap{display:flex;align-items:center;gap:4px}
+.spdwrap input[type=range]{width:0;opacity:0;transition:width .18s ease,opacity .18s ease;--fg:var(--accent)}
+.spdwrap:hover input[type=range],.spdwrap:focus-within input[type=range]{width:64px;opacity:1}
+.spd-btn{position:relative}
+.spd-btn b{
+  position:absolute;right:-2px;bottom:0;font-size:7.5px;font-weight:700;letter-spacing:-.02em;
+  background:var(--accent);color:#fff;border-radius:3px;padding:0 2px;line-height:1.35;
+}
+.spd-btn b:empty{display:none}

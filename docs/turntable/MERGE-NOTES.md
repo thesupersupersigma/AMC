@@ -18,10 +18,12 @@ other turntable file needs to change.
 | `getDuration()` | `audio.duration` (falls back to track data) | the facade's duration of the loaded **source file** |
 | `isPaused()` / `isEnded()` | `audio.paused` / `audio.ended` | facade state |
 | `seek(sec)` | sets `audio.currentTime`; on a cue side, first moves playback to the song holding `sec` via `playAt` / `playList` | same logic, seeking through the facade |
-| `setRate(r)` | `playbackRate` + `defaultPlaybackRate`, `preservesPitch = r === 1` | facade rate, **without pitch preservation** (see §2) |
+| `setRate(r)` | `playbackRate` + `defaultPlaybackRate`, `preservesPitch = r === 1`; applied at boot from the saved speed and kept across views | facade rate, **without pitch preservation** (see §2) |
 | `setInstantRate(r)` | `playbackRate` only (brake / spin-up ramps) | facade rate, a transient value that must not become the default |
 | `getRate()` / `getDefaultRate()` / `pitchPreserved()` | element properties | facade equivalents |
 | `interceptTransport(hooks)` | shadows the element's own `pause()` / `play()` so every pause path (player bar, Space, PiP, Media Session) gets the stop/start effect | wrap the facade's `pause()` / `play()` the same way, or add a pre-pause hook to the facade |
+| `playTrack(t)` | another song of the album or side, keeping playing / paused (via `playAt` / `playList`); used by the Shift-snap drop | unchanged (player-level) |
+| `togglePlayback()` | the player's `togglePlay()`, used by the deck's START·STOP | unchanged |
 | `realPause()` / `realPlay()` | `HTMLMediaElement.prototype.pause/play.call(audio)` | the facade's unwrapped methods |
 | `syncPositionState()` | `navigator.mediaSession.setPositionState({duration, position, playbackRate})` from the element | the same, from facade state; `playbackRate` must be the **real** current rate |
 | `onSeeked` / `onDurationKnown` / `onEnded` | element events `seeked` / `durationchange`+`loadedmetadata` / `ended` | facade events |
@@ -33,9 +35,13 @@ vinyl side walks the whole side, so a virtual track's window
 
 ## 2. The software engine (ALAC / E-AC-3 / Atmos path) needs rate without pitch preservation
 
-The turntable's speed control (16–78 RPM, rate = rpm / 33⅓, about 0.48× to
-2.34×) and the stop/start effect (ramps down to about 0.1× over 0.8 s, then
-up over 0.4 s) behave like vinyl: **the pitch moves with the speed.** For
+The speed control (16–78 RPM, rate = rpm / 33⅓, about 0.48× to 2.34×) and
+the stop/start effect (ramps down to about 0.1× over 0.8 s, then up over
+0.4 s) behave like vinyl: **the pitch moves with the speed.** The speed is
+a **global playback setting**. It persists as a pref and applies from boot
+in every view, not only in turntable mode: the player bar has its own speed
+slider next to the volume, and Cover mode has a speed row. Only the
+stop/start effect is limited to turntable mode. For
 files the engine decodes in software, this means:
 
 - **Variable-rate resampling in the AudioWorklet**, reading from the ring
@@ -117,9 +123,15 @@ engine branch's transport code does not have to carry it.
 
 ## 5. Other merge-time notes
 
+- The player bar's speed control (`#spdWrap`: button + slider) is mounted
+  at boot by `src/ui/turntable/speed.ts` into `#playerbar .pb-right`,
+  before `.volwrap`, with no `index.html` edit. If the engine branch
+  rebuilds the player bar, keep that container, or move the mount.
+- The deck's root class is `.tt-deck`, never `.tt`. The player bar's time
+  labels are `.pb-scrub .tt`, and hiding `.tt` collapses the waveform grid.
 - `src/audio/engine.ts`'s crossfade tail element (`startCrossfadeTail`)
-  plays at 1× even while the turntable is at 45 RPM. If the engine keeps a
-  tail, give it the same rate, or skip the crossfade in turntable mode.
+  plays at 1× even when the speed is 45 RPM. If the engine keeps a
+  tail, give it the same rate, or skip the crossfade when the rate is not 1.
 - `state.ts`: the prefs `artQuality`, `npMode`, `ttRpm`, `ttBrake` are
   added to `AppState`, `currentPrefs()` and `seedStateFromPrefs()`. If the
   engine or Atmos branches add prefs, both sets should stay.

@@ -22,7 +22,19 @@ export async function startServer(port = 5199) {
     cwd: new URL('../..', import.meta.url).pathname,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BROWSER: 'none' },
+    /* its own process group, so stop() takes vite down with npx */
+    detached: true,
   });
+  const stop = () => {
+    try {
+      process.kill(-proc.pid, 'SIGTERM');
+    } catch {
+      /* already gone */
+    }
+    proc.stdout.destroy();
+    proc.stderr.destroy();
+    proc.unref();
+  };
   let log = '';
   proc.stdout.on('data', (d) => (log += d));
   proc.stderr.on('data', (d) => (log += d));
@@ -30,13 +42,13 @@ export async function startServer(port = 5199) {
   for (let i = 0; i < 100; i++) {
     try {
       const r = await fetch(url);
-      if (r.ok) return { url, stop: () => proc.kill('SIGTERM'), log: () => log };
+      if (r.ok) return { url, stop, log: () => log };
     } catch {
       /* not up yet */
     }
     await sleep(200);
   }
-  proc.kill('SIGTERM');
+  stop();
   throw new Error('vite did not start:\n' + log);
 }
 

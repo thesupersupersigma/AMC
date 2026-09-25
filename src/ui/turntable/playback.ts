@@ -10,7 +10,7 @@
 import type { AnyTrack } from '../../types';
 import { S, refOf } from '../../state';
 import { audio } from '../../audio/engine';
-import { playAt, playList } from '../player';
+import { playAt, playList, togglePlay } from '../player';
 
 /* ---------- time ---------- */
 
@@ -65,6 +65,23 @@ export function sideTracks(t: AnyTrack | null = S.current): AnyTrack[] {
 
 /* ---------- seeking ---------- */
 
+/** Moves playback to another song of the current album (or cue side),
+    keeping playing / paused as it was: from the queue when it is queued,
+    else the album is queued from that song. */
+export function playTrack(t: AnyTrack): void {
+  const wasPaused = audio.paused;
+  const qi = S.queue.indexOf(t);
+  if (qi >= 0) {
+    playAt(qi, !wasPaused);
+    return;
+  }
+  const al = S.albumMap[t.coverKey];
+  const list = al ? al.tracks : sideTracks(t).length ? sideTracks(t) : [t];
+  playList(list, Math.max(0, list.indexOf(t)));
+  /* stay paused — without a brake: nothing was playing */
+  if (wasPaused) realPause();
+}
+
 /** Seeks to `sec` of the SOURCE file. On a cue side a target outside the
     current track moves playback to the track that holds it (queue first,
     else its album), so the tonearm can be dropped anywhere on the side. */
@@ -76,17 +93,7 @@ export function seek(sec: number): void {
     const w = trackWindow(t);
     if (target < w.start - 0.01 || target >= w.end - 0.01) {
       const holder = sideTracks(t).find((x) => x.kind === 'virtual' && target >= x.startSec - 0.01 && (x.endSec <= 0 || target < x.endSec - 0.01));
-      if (holder && holder !== t) {
-        const wasPaused = audio.paused;
-        const qi = S.queue.indexOf(holder);
-        if (qi >= 0) playAt(qi, !wasPaused);
-        else {
-          const al = S.albumMap[holder.coverKey];
-          const list = al ? al.tracks : sideTracks(t);
-          playList(list, Math.max(0, list.indexOf(holder)));
-          if (wasPaused) audio.pause();
-        }
-      }
+      if (holder && holder !== t) playTrack(holder);
     }
   }
   try {
@@ -94,6 +101,12 @@ export function seek(sec: number): void {
   } catch {
     /* not seekable yet — the next seek will land */
   }
+}
+
+/** Start / stop, exactly as the transport button does it (so the
+    stop/start effect applies). */
+export function togglePlayback(): void {
+  togglePlay();
 }
 
 /* ---------- rate (pitch follows speed, like a real record) ---------- */

@@ -56,7 +56,7 @@ async function reduced({ server, check }) {
     const seen = await sw;
     const faded = seen.some((x) => Number(x.op) < 0.6);
     check('reduced motion: an album change is a crossfade (no sliding record)', seen.every((x) => x.rec === '') && faded && !seen[seen.length - 1].running, { faded, last: seen[seen.length - 1] });
-    await page.click('[data-rpm="45"]');
+    await page.click('.tt-presets [data-rpm="45"]');
     const rate = await page.evaluate(() => [document.getElementById('audio').playbackRate, document.getElementById('audio').preservesPitch]);
     check('reduced motion: RPM still changes the speed and pitch', Math.abs(rate[0] - 1.35) < 0.001 && rate[1] === false, rate);
     await page.click('#ttRpmReset');

@@ -40,6 +40,30 @@ try {
       await page.waitForTimeout(880);
       await page.screenshot({ path: `${OUT}turntable-${w}x${h}-swap.png` });
       await page.waitForTimeout(2500);
+      if (w === 1365) {
+        /* Shift-dragging the tonearm: the album's songs show as bands and
+           the label names the one the needle will drop onto. */
+        const geo = await page.evaluate(async () => {
+          const g = await window.__mod('/src/ui/turntable/geometry.ts');
+          const m = await window.__mod('/src/ui/turntable/motion.ts');
+          const st = document.querySelector('.tt-stage').getBoundingClientRect();
+          const u = st.width / g.STAGE_W;
+          const hb = document.getElementById('ttHead').getBoundingClientRect();
+          return { pivot: [st.left + g.PIVOT.x * u, st.top + g.PIVOT.y * u], head: [hb.left + hb.width / 2, hb.top + hb.height / 2], arm: m.currentArmAngle(), target: g.armAngleFor(0.62) };
+        });
+        const dx = geo.head[0] - geo.pivot[0];
+        const dy = geo.head[1] - geo.pivot[1];
+        const a = Math.atan2(dy, dx) + ((geo.target - geo.arm) * Math.PI) / 180;
+        const r = Math.hypot(dx, dy);
+        await page.keyboard.down('Shift');
+        await page.mouse.move(geo.head[0], geo.head[1]);
+        await page.mouse.down();
+        await page.mouse.move(geo.pivot[0] + r * Math.cos(a), geo.pivot[1] + r * Math.sin(a), { steps: 8 });
+        await page.waitForTimeout(250);
+        await page.screenshot({ path: `${OUT}turntable-${w}x${h}-shift-snap.png` });
+        await page.mouse.up();
+        await page.keyboard.up('Shift');
+      }
     } finally {
       await browser.close();
     }

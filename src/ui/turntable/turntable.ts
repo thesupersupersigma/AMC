@@ -8,7 +8,7 @@ import { heroFor, heroURLNow, setImgDecoded } from '../../art/hero';
 import * as pb from './playback';
 import { armMoveTo, frameStats, noteJump, paintBands, resetFrameStats, seekedByHand, startMotion, stopMotion, wireArmInput } from './motion';
 import { cancelSwap, swapRunning, swapTo } from './swap';
-import { speedClick, speedEnter, speedLeave, wireSpeedInput } from './speed';
+import { speedClick, speedEnter, speedLeave, syncSpeedUI, wireSpeedInput } from './speed';
 import { modeButtonMarkup, npMode, setNpMode, speedMarkup, syncModeButton, turntableMarkup } from './view';
 
 let npOpen = false;
@@ -96,6 +96,7 @@ function applyMode(): void {
 
 export function turntableOpened(): void {
   npOpen = true;
+  syncSpeedUI();
   applyMode();
 }
 
@@ -139,7 +140,12 @@ export function turntableClick(target: Element): boolean {
     applyMode();
     return true;
   }
-  if (active && speedClick(target)) return true;
+  if (target.closest('#ttStart')) {
+    pb.togglePlayback();
+    return true;
+  }
+  /* The speed row shows in both modes: speed is a playback setting. */
+  if (speedClick(target)) return true;
   return false;
 }
 
