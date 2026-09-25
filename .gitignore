@@ -3,3 +3,4 @@ node_modules/
 dist/
 dist-file/
 dev-dist/
+test/private/

@@ -130,6 +130,16 @@ TypeScript and Vite. No framework, no UI library, no runtime dependencies. Every
 parser — FLAC, MP4, ID3, CUE, LRC — is hand-written and reads only file headers,
 never whole files.
 
+## Third-party
+
+- **Dolby Atmos (E-AC-3 JOC) decoding** in `src/audio/atmos/` is a TypeScript
+  port of parts of [Cavern](https://github.com/VoidXH/Cavern) by VoidX
+  ([en.sbence.hu](http://en.sbence.hu)). That folder is under
+  [Cavern's licence](src/audio/atmos/LICENSE), not AMC's MIT licence: among
+  other terms, it may not be sold and must stay ad-free. See
+  [its README](src/audio/atmos/README.md). "Dolby" and "Dolby Atmos" are
+  trademarks of Dolby Laboratories; AMC is not affiliated with Dolby.
+
 ---
 
 AMC is not affiliated with, endorsed by, or connected to Apple Inc.
