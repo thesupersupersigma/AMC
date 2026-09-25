@@ -430,8 +430,11 @@ export class OAElementMD {
         throw new UnsupportedFeatureError('mdOffset');
     }
     const count = extractor.read(3) + 1;
-    this.blockOffsetFactor = new Array<number>(count).fill(0);
-    this.rampDuration = new Array<number>(count).fill(0);
+    // Cavern allocates these per frame; reuse them when the count repeats.
+    if (this.rampDuration.length !== count || this.blockOffsetFactor.length !== count) {
+      this.blockOffsetFactor = new Array<number>(count).fill(0);
+      this.rampDuration = new Array<number>(count).fill(0);
+    }
     for (let blk = 0; blk < count; ++blk) {
       this.blockUpdateInfo(extractor, blk);
     }
@@ -469,6 +472,7 @@ export class ObjectAudioMetadata {
   offset = 0;
   /** Frames decoded since construction, for reporting. */
   frames = 0;
+  private readonly staticChannels: number[] = [];
 
   constructor(private readonly cavernCompat = false) {}
 
@@ -509,9 +513,12 @@ export class ObjectAudioMetadata {
     this.frames++;
   }
 
-  /** The "objects" that are just static channels (ReferenceChannel values). */
+  /** The "objects" that are just static channels (ReferenceChannel values).
+      The returned array is reused; copy it to keep it. */
   getStaticChannels(): number[] {
-    const result = new Array<number>(this.beds).fill(0);
+    const result = this.staticChannels;
+    result.length = this.beds;
+    result.fill(0);
     let lastChannel = 0;
     for (let i = 0; i < this.bedAssignment.length; i++) {
       const assignment = this.bedAssignment[i];
@@ -561,16 +568,27 @@ export class ObjectAudioMetadata {
     return element;
   }
 
+  /** Cavern allocates a fresh bool[17] per bed instance every frame; this
+      hands out cleared rows from a pool instead. */
+  private bedRow(index: number): boolean[] {
+    let row = this.bedPool[index];
+    if (!row) row = this.bedPool[index] = new Array<boolean>(NonStandardBedChannel.Max);
+    row.fill(false);
+    return row;
+  }
+  private readonly bedPool: boolean[][] = [];
+
   private programAssignment(extractor: BitExtractor): void {
     const max = NonStandardBedChannel.Max;
     if (extractor.readBit()) {
       // Dynamic object-only program
       if (extractor.readBit()) {
         // LFE present
-        this.bedAssignment = [new Array<boolean>(max).fill(false)];
+        this.bedAssignment.length = 1;
+        this.bedAssignment[0] = this.bedRow(0);
         this.bedAssignment[0][NonStandardBedChannel.LowFrequencyEffects] = true;
       } else {
-        this.bedAssignment = [];
+        this.bedAssignment.length = 0;
       }
     } else {
       const contentDescription = extractor.read(4);
@@ -579,23 +597,27 @@ export class ObjectAudioMetadata {
       if ((contentDescription & 1) !== 0) {
         extractor.skip(1); // The object is distributable - Cavern will do it anyway
         const instances = extractor.readBit() ? extractor.read(3) + 2 : 1;
-        this.bedAssignment = [];
+        this.bedAssignment.length = instances;
         for (let bed = 0; bed < instances; ++bed) {
-          this.bedAssignment[bed] = new Array<boolean>(max).fill(false);
+          const row = (this.bedAssignment[bed] = this.bedRow(bed));
           if (extractor.readBit()) {
             // LFE only
-            this.bedAssignment[bed][NonStandardBedChannel.LowFrequencyEffects] = true;
+            row[NonStandardBedChannel.LowFrequencyEffects] = true;
           } else {
             if (extractor.readBit()) {
-              // Standard bed assignment
-              const standardAssignment = extractor.readBits(10);
-              for (let i = 0; i < standardAssignment.length; ++i) {
+              // Standard bed assignment. BitExtractor.ReadBits fills its
+              // array from the back: the first bit read is index 9.
+              for (let i = 9; i >= 0; --i) {
+                const bit = extractor.readBit();
                 for (let j = 0; j < standardBedChannels[i].length; ++j) {
-                  this.bedAssignment[bed][standardBedChannels[i][j]] = standardAssignment[i];
+                  row[standardBedChannels[i][j]] = bit;
                 }
               }
             } else {
-              this.bedAssignment[bed] = extractor.readBits(max);
+              // ReadBits(Max): first bit read is index Max - 1.
+              for (let i = max - 1; i >= 0; --i) {
+                row[i] = extractor.readBit();
+              }
             }
           }
         }

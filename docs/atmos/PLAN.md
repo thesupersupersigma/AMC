@@ -127,13 +127,25 @@ says AMC is not affiliated with Dolby.
    (which detaches them), the processor notices the detached buffer and
    reallocates, so either engine behaviour works.
 
-### Performance plan
-The QMF is the cost: Cavern evaluates it as a direct 64×128 complex matrix.
-The port keeps Cavern's exact maths but factors the modulation into a 128-point
-FFT (pre/post twiddles). Numerically this is the same transform to float
-rounding, at a fraction of the work. Budget: >3× realtime on one thread.
-Measured and reported at gate 3. If JS misses it, the QMF + matrix loop moves
-to a C→WASM module built with clang.
+### Performance (measured at gate 3)
+Cavern evaluates the QMF as direct 64×128 complex products. The port keeps
+the same sums but folds them onto a 64-point DCT-IV/DST-IV pair, each one a
+32-point complex FFT (verified against a direct transcription of Cavern's
+code to 1e-13). Within a frame, the 1-data-point linear matrix ramp is
+evaluated inside the mixing loop instead of being tabulated.
+
+On this machine (Xeon @ 2.1 GHz, one thread, Node 22 / V8), with the real
+file's 15 objects:
+
+- **16× realtime**: about 1.8 ms per 32 ms frame at p50, 3.7 ms at p99.
+- Processor state: about 1.9 MB.
+- Per-frame JS allocation: about 7 KB, all of it the returned keyframe
+  objects and OAMD bookkeeping. Audio buffers are reused.
+
+A Chromebook-class core that is 2–3× slower still gives 5–8× realtime,
+above the 3× budget, so the WASM path wasn't needed. Remaining time splits
+evenly across mixing, the synthesis window and the DCTs, which is
+irreducible filterbank work. `test/atmos/bench.test.ts` re-measures it.
 
 ### Main thread (`render/`)
 - `input`: a discrete-interpretation `GainNode` → `ChannelSplitterNode`.
@@ -178,10 +190,13 @@ fixes it, and each fix is marked `DEVIATION` in the code.
 3. **Zero-length ramps** (`OAElementMD.UpdateSources`): with `rampDuration` 0,
    `futureDistance` is ≤ 0 and the position never moves. The default applies
    the target immediately.
-4. Two-data-point steep-slope interpolation indexes the parameter-band matrix
-   by QMF subband without the band mapping. That code path is mirrored in both
-   modes and only flagged here, because the spec's intent is unclear and
-   Cavern is the reference.
+4. **Band mapping** (`GetMixingMatrices`): in two cases a band-indexed
+   matrix is read by QMF *subband* index instead of through the
+   parameter-band mapping. One is two data points with a steep slope; the
+   other is the first half of two-data-point interpolation. And with one
+   data point and a steep slope, a stale second data point can be used.
+   The default indexes through the mapping and uses data point 0. The test
+   file never takes these paths.
 5. Sparse-coded JOC objects are decoded as silence, on purpose (Cavern:
    "documentation is incorrect"). Both modes keep this, and `process` counts
    such frames so the harness can report them.
@@ -226,5 +241,15 @@ are walked.
   FFmpeg 5.1(side) order), with no decoder priming offset.
 - The processor always returns exactly `maxChannels` channels (inactive
   objects are silent), so the Worklet channel count never changes mid-stream.
-- The output is delayed by the QMF round trip (measured at gate 3), bed
-  included, relative to the core. Keyframes already include that delay.
+- The output is delayed by the QMF round trip, **577 samples** (12 ms at
+  48 kHz), bed included, relative to the core (`jocLatency`). Keyframes
+  already include that delay. If the engine shows a playhead from played
+  frames, Atmos output lags it by 12 ms, which is inaudible for sync.
+- Once dec3 flags JOC, `process` never returns `null`. Frames before the first
+  JOC payload play Cavern's channel-based fallback, in the same channel
+  layout, and frames that lose their JOC payload hold the last matrices. The
+  Worklet channel count therefore never changes mid-track.
+- FFmpeg applies E-AC-3 dynamic range compression by default. Its core
+  differs from Cavern's (no DRC) by 2.3% RMS relative, or 0.6% with
+  `-drc_scale 0`. The objects follow whatever core they are given, so this is
+  the engine's call.
