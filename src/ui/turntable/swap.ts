@@ -203,24 +203,33 @@ function finish(): void {
   lastDone = performance.now();
 }
 
-/** Reduced motion: fade the record and sleeve out, change album, fade in. */
+/** Reduced motion: no sliding, no spinning — the record and sleeve fade
+    out, the album changes, they fade back in. Web Animations, so the
+    app-wide reduced-motion rule (which zeroes CSS transitions) leaves this
+    one gentle fade intact. */
+const FADE_MS = 180;
+function fade(els: Array<HTMLElement | null>, from: number, to: number): Promise<void> {
+  const runs = els.filter((e): e is HTMLElement => !!e && typeof e.animate === 'function').map((e) => e.animate([{ opacity: from }, { opacity: to }], { duration: FADE_MS, easing: 'ease', fill: 'forwards' }));
+  return Promise.all(runs.map((a) => a.finished.catch(() => undefined))).then(() => undefined);
+}
+
 function crossfade(): void {
   running = true;
   painted = false;
   const { rec, sleeve } = els();
-  for (const el of [rec, sleeve]) if (el) el.style.transition = 'opacity .18s ease';
-  for (const el of [rec, sleeve]) if (el) el.style.opacity = '0';
-  setTimeout(() => {
-    painted = true;
-    paint(targetKey);
-    for (const el of [rec, sleeve]) if (el) el.style.opacity = '';
-    setTimeout(() => {
-      for (const el of [rec, sleeve]) if (el) el.style.transition = '';
+  void fade([rec, sleeve], 1, 0)
+    .then(() => {
+      if (!running) return;
+      painted = true;
+      paint(targetKey);
+      return fade([rec, sleeve], 0, 1);
+    })
+    .then(() => {
+      for (const el of [rec, sleeve]) if (el) el.getAnimations().forEach((a) => a.cancel());
       running = false;
       painted = false;
       lastDone = performance.now();
-    }, 200);
-  }, 200);
+    });
 }
 
 /** Leaving the mode mid-swap: put everything back where it rests. */
@@ -235,6 +244,6 @@ export function cancelSwap(): void {
   if (world) world.classList.remove('tt-offcentre');
   for (const el of [rec, sleeve]) if (el) {
     el.style.opacity = '';
-    el.style.transition = '';
+    if (typeof el.getAnimations === 'function') el.getAnimations().forEach((a) => a.cancel());
   }
 }

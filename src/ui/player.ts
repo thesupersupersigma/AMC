@@ -2,7 +2,7 @@
    restore-last-track. */
 
 import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
-import { S, PREFS, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, savePrefs } from '../state';
+import { S, PREFS, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, savePrefs } from '../state'; // hires-art hook: FULL / releaseFullArt folded into art/hero
 import { audio, cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
 import { ST_META, ST_TRACKS, idbDel, idbGet, idbPut } from '../db/idb';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';

@@ -142,7 +142,13 @@ export function armMoveTo(to: (() => number) | null, ms = 650, done?: () => void
   const from = armAngle;
   const t0 = performance.now();
   const target = to || liveArmAngle;
-  if (reducedMotion()) ms = Math.min(ms, 200);
+  if (reducedMotion()) {
+    /* no swing: the arm is simply where it belongs */
+    overrideArm(null);
+    setLifted(false);
+    if (done) done();
+    return;
+  }
   setLifted(true);
   overrideArm((now) => {
     const p = Math.min(1, (now - t0) / ms);

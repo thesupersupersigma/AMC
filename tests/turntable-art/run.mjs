@@ -4,7 +4,7 @@
 
 import { startServer, makeChecker } from './harness.mjs';
 
-const ALL = ['proxy', 'art', 'catalog', 'turntable'];
+const ALL = ['proxy', 'art', 'catalog', 'turntable', 'polish'];
 const pick = process.argv.slice(2);
 const names = pick.length ? pick : ALL;
 const { check, results, failed } = makeChecker();

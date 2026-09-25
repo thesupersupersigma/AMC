@@ -8,7 +8,7 @@
    opacity; prefers-reduced-motion disables the transitions in CSS. */
 
 import type { AnyTrack } from '../types';
-import { S, coverURL, haveCover } from '../state';
+import { S, coverURL, haveCover } from '../state'; // hires-art hook: FULL folded into art/hero
 import { heroArt, heroFor, heroURLNow, setImgDecoded } from '../art/hero'; // hires-art hook
 import { ttDeckMarkup, ttModeButton, ttSpeedMarkup, turntableClick, turntableClosed, turntableOpened, turntableTrackChanged, wireTurntable } from './turntable/turntable'; // turntable hook
 import { audio } from '../audio/engine';

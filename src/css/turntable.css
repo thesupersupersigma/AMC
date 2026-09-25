@@ -23,6 +23,13 @@
 #npview.np-tt .np-controls{justify-content:flex-start;margin-left:-8px}
 #npview.np-tt .np-times{margin-top:6px}
 
+/* Lyrics beside the deck: instead of sliding the whole row left (which
+   would push the sleeve off screen and the controls under the panel), the
+   stage gives up the panel's width. */
+#npview.np-tt{--lyr:0px}
+body.lyrics-open #npview.np-tt{--lyr:min(412px,88vw)}
+body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:calc(var(--lyr) + 12px)}
+
 /* ---------------- the stage ----------------
    A fixed-aspect box sized by the viewport; everything inside is placed
    in stage units (1500 × 760) through container query units, so the
@@ -30,7 +37,7 @@
 .tt{flex:0 1 auto;min-width:0}
 .tt-stage{
   position:relative;container-type:size;
-  width:min(calc(100vw - clamp(300px,24vw,380px) - clamp(20px,3vw,48px) - 2 * clamp(20px,2.4vw,40px)), calc((100vh - 48px) * 1500 / 760), 1400px);
+  width:min(calc(100vw - var(--lyr,0px) - clamp(300px,24vw,380px) - clamp(20px,3vw,48px) - 2 * clamp(20px,2.4vw,40px)), calc((100vh - 48px) * 1500 / 760), 1400px);
 }
 .tt-world{position:absolute;inset:0;--u:calc(100cqw / 1500)}
 .tt-world > *{position:absolute}

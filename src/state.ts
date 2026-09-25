@@ -1,6 +1,6 @@
 /* App state, the library index, artwork caches, and preferences. */
 
-import type { Album, AnyTrack, ArtQuality, Artist, LyricsSource, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
+import type { Album, AnyTrack, ArtQuality, Artist, LyricsSource, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types'; // hires-art hook: ArtQuality
 import { $$, clamp, norm } from './util';
 import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
