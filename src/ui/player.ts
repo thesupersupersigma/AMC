@@ -2,8 +2,10 @@
    restore-last-track. */
 
 import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
-import { S, PREFS, FULL, codecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
-import { audio, cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
+import { S, PREFS, FULL, canSoftDecode, codecLabel, engineCodecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
+import { cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
+import { media } from '../audio/media';
+import type { EngineSource } from '../audio/soft/protocol';
 import { ST_META, ST_TRACKS, idbDel, idbGet, idbPut } from '../db/idb';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';
 import { lyricsTrackChanged } from './lyrics';
@@ -48,12 +50,14 @@ function buildOrder(startIndex: number): void {
 export function playList(tracks: RowTrack[], index: number, opts?: { attemptTarget?: boolean }): void {
   const target = tracks[index];
   /* Tracks whose codec already failed to decode this session stay out of
-     the queue so playback never stalls on them. A track the user activated
-     directly (double-click, Enter, "Play from…") is still attempted — the
-     result is logged, and success withdraws the codec verdict. Play and
-     Shuffle buttons pass no flag: their target is just "start here". */
+     the queue so playback never stalls on them — unless the software
+     engine decodes that codec, in which case they play there. A track the
+     user activated directly (double-click, Enter, "Play from…") is still
+     attempted — the result is logged, and success withdraws the codec
+     verdict. Play and Shuffle buttons pass no flag: their target is just
+     "start here". */
   const attempt = !!(opts && opts.attemptTarget);
-  const playable = (tracks || []).filter(isPlayableTrack).filter((t) => (attempt && t === target) || !isCodecFailed(t.codec));
+  const playable = (tracks || []).filter(isPlayableTrack).filter((t) => (attempt && t === target) || !isCodecFailed(t.codec) || canSoftDecode(t.codec));
   if (!playable.length) {
     toast('Nothing here can be played from this folder');
     return;
@@ -100,61 +104,95 @@ export function sourcePathOf(t: AnyTrack): string {
   return t.kind === 'virtual' ? t.sourcePath : t.path;
 }
 
+/* ---------- path selection ----------------------------------------------
+   Native first: everything Chrome plays stays on the <audio> element. A
+   fourcc that genuinely failed to decode this session — and that the
+   software engine handles (alac, ec-3, ac-3) — starts directly in the
+   engine; the first failure hands off mid-attempt (see the error
+   listener). Genuinely unsupported codecs keep today's skip behaviour. */
+
+function useEngineFor(t: AnyTrack): boolean {
+  return isCodecFailed(t.codec) && canSoftDecode(t.codec);
+}
+
+function engineSourceOf(t: AnyTrack): EngineSource {
+  return { file: t.file as File, codec: t.codec as string, name: t.title || t.path };
+}
+
+/** The track handed from a failing native attempt to the engine — its
+    rejected play() promise is expected, not an error. */
+let handedOff: AnyTrack | null = null;
+const engineAnnounced = new Set<string>();
+
+function announceEngine(codec: string): void {
+  if (engineAnnounced.has(codec)) return;
+  engineAnnounced.add(codec);
+  logErr('playback', codec + " isn't supported natively here — using software decoding", codecLabel(codec));
+}
+
 function loadTrack(t: AnyTrack, autoplay: boolean): void {
   if (!t) return;
   xfFiredFor = '';
+  gaplessArmed = '';
+  handedOff = null;
   if (!t.file) {
     logErr('playback', 'No file behind ' + t.title, t.path);
     return skipAfterFailure();
   }
   const srcKey = refOf(t.folderId, sourcePathOf(t));
-  /* Another window of the file already in the element (a cue track of the
-     same rip): keep the decoded stream, just move the playhead. */
-  const reuse = srcKey === getLoadedSrcKey() && !!audio.src;
+  /* Another window of the file already loaded (a cue track of the same
+     rip): keep the decoded stream, just move the playhead. */
+  const reuse = srcKey === getLoadedSrcKey() && media.hasSource();
+  const startAt = t.kind === 'virtual' ? t.startSec : 0;
   if (!reuse) {
-    /* Crossfade: hand the outgoing tail to a side element before this one
-       switches files, then ramp the incoming track up under it. Same-file
-       cue advances never reach here — that path stays gapless. */
+    /* Crossfade: hand the outgoing tail to a side element (or the detached
+       engine stream) before this one switches files, then ramp the
+       incoming track up under it. Same-file cue advances never reach here
+       — that path stays gapless. */
     const prev = S.current;
     const xf = S.crossfadeSec;
-    if (xf > 0 && autoplay && prev && prev.file && !audio.paused && audio.currentTime > 0) {
-      startCrossfadeTail(prev.file, audio.currentTime, audio.muted ? 0 : audio.volume, xf);
+    if (xf > 0 && autoplay && prev && prev.file && !media.paused && media.currentTime > 0) {
+      startCrossfadeTail(prev.file, media.currentTime, media.muted ? 0 : media.volume, xf);
       rampMainVolume(S.muted ? 0 : S.volume, xf);
     }
     revokeCurrentURL();
-    let url: string;
-    try {
-      url = createTrackURL(t.file);
-    } catch (e) {
-      logErr('playback', 'Could not open ' + t.title, (e as Error) && (e as Error).message);
-      return skipAfterFailure();
+    if (useEngineFor(t)) {
+      announceEngine(t.codec as string);
+      media.loadEngine(engineSourceOf(t), startAt);
+    } else {
+      let url: string;
+      try {
+        url = createTrackURL(t.file);
+      } catch (e) {
+        logErr('playback', 'Could not open ' + t.title, (e as Error) && (e as Error).message);
+        return skipAfterFailure();
+      }
+      media.loadNative(url);
+      if (startAt > 0) pendingSeek = startAt; /* applied on loadedmetadata */
     }
-    audio.src = url;
-    audio.load();
     setLoadedSrcKey(srcKey);
   }
   S.current = t;
   S.lastPos = 0;
   trackLoadedAt = performance.now();
   if (autoplay) playbackArmed = true;
-  const startAt = t.kind === 'virtual' ? t.startSec : 0;
   if (reuse) {
     try {
-      audio.currentTime = startAt;
+      media.currentTime = startAt;
     } catch {
       pendingSeek = startAt;
     }
-  } else if (startAt > 0) {
-    pendingSeek = startAt; /* applied on loadedmetadata */
   }
   if (autoplay) {
-    const p = audio.play();
+    const p = media.play();
     if (p && p.catch)
       p.catch((err: Error & { name?: string }) => {
         /* An autoplay rejection is not a decode failure — leave it paused. */
         if (err && err.name === 'NotAllowedError') {
           S.playing = false;
           syncPlayerUI();
+        } else if (handedOff === t || (media.path === 'engine' && S.current === t && !media.error)) {
+          /* the native attempt failed and the engine took over */
         } else {
           logErr('playback', 'Could not start ' + t.title, err && err.message);
         }
@@ -189,8 +227,9 @@ function boundaryTick(): void {
   boundaryRaf = 0;
   drawWaveformProgress();
   const c = S.current;
-  if (!c || audio.paused) return; /* the 'play' listener restarts the loop */
+  if (!c || media.paused) return; /* the 'play' listener restarts the loop */
   checkCrossfadeAdvance(c);
+  maybeArmGapless(c);
   if (c.kind === 'virtual') checkCueBoundary(c);
   boundaryRaf = requestAnimationFrame(boundaryTick);
 }
@@ -217,12 +256,12 @@ function resumeKeyOf(t: AnyTrack): string {
 let lastResumeSave = 0;
 function maybeSaveResume(): void {
   const c = S.current;
-  if (!c || c.kind !== 'file' || audio.paused) return;
+  if (!c || c.kind !== 'file' || media.paused) return;
   if (!((c.duration || 0) > RESUME_MIN_DURATION)) return;
   const now = performance.now();
   if (now - lastResumeSave < 5000) return;
   lastResumeSave = now;
-  const sec = Math.floor(audio.currentTime || 0);
+  const sec = Math.floor(media.currentTime || 0);
   if (sec > (c.duration || 0) - 20) {
     c.resumeSec = 0;
     void idbDel(ST_META, resumeKeyOf(c));
@@ -254,7 +293,7 @@ function offerResume(t: AnyTrack): void {
     chip.hidden = false;
     chip.onclick = (): void => {
       try {
-        audio.currentTime = row.sec;
+        media.currentTime = row.sec;
       } catch {
         pendingSeek = row.sec;
       }
@@ -272,11 +311,11 @@ function offerResume(t: AnyTrack): void {
    single element cannot overlap itself. */
 let xfFiredFor = '';
 function checkCrossfadeAdvance(c: AnyTrack): void {
-  if (!(S.crossfadeSec > 0) || audio.paused || S.repeat === 'one') return;
+  if (!(S.crossfadeSec > 0) || media.paused || S.repeat === 'one') return;
   if (xfFiredFor === c.uid) return;
-  const end = c.kind === 'virtual' ? c.endSec : c.duration || audio.duration || 0;
+  const end = c.kind === 'virtual' ? c.endSec : c.duration || media.duration || 0;
   if (!(end > 0)) return;
-  const remain = end - audio.currentTime;
+  const remain = end - media.currentTime;
   if (remain > S.crossfadeSec || remain <= 0.08) return;
   const ni = S.qi + 1;
   const nxt = ni < S.queue.length ? S.queue[ni] : null;
@@ -297,10 +336,10 @@ function checkCrossfadeAdvance(c: AnyTrack): void {
 
 function checkCueBoundary(c: VirtualTrack): void {
   if (!(c.endSec > 0)) return; /* open-ended: the file's own 'ended' rules */
-  if (audio.currentTime < c.endSec - 0.02) return;
+  if (media.currentTime < c.endSec - 0.02) return;
   if (S.repeat === 'one') {
     try {
-      audio.currentTime = c.startSec;
+      media.currentTime = c.startSec;
     } catch {
       /* not seekable right now; the next tick retries */
     }
@@ -320,7 +359,7 @@ function checkCueBoundary(c: VirtualTrack): void {
        just update current-track state. True gapless playback. */
     S.qi = ni;
     S.current = nxt;
-    S.lastPos = audio.currentTime;
+    S.lastPos = media.currentTime;
     syncPlayerUI();
     updatePlayingRows();
     updateMediaSession(nxt);
@@ -330,7 +369,7 @@ function checkCueBoundary(c: VirtualTrack): void {
     nowPlayingTrackChanged();
     return;
   }
-  audio.pause();
+  media.pause();
   next(false);
 }
 
@@ -371,8 +410,8 @@ function skipAfterFailure(): void {
 export function next(manual: boolean, afterFailure?: boolean): void {
   if (!S.queue.length) return;
   if (!manual && !afterFailure && S.repeat === 'one') {
-    audio.currentTime = scrubWindow().base;
-    audio.play().catch(() => {
+    media.currentTime = scrubWindow().base;
+    media.play().catch(() => {
       /* stay paused */
     });
     return;
@@ -383,7 +422,7 @@ export function next(manual: boolean, afterFailure?: boolean): void {
       ni = 0;
     } else {
       S.playing = false;
-      audio.pause();
+      media.pause();
       syncPlayerUI();
       return;
     }
@@ -394,13 +433,13 @@ export function next(manual: boolean, afterFailure?: boolean): void {
 export function prev(): void {
   if (!S.queue.length) return;
   const base = scrubWindow().base;
-  if (audio.currentTime - base > 3) {
-    audio.currentTime = base;
+  if (media.currentTime - base > 3) {
+    media.currentTime = base;
     return;
   }
   if (S.qi <= 0) {
     if (S.repeat === 'all') return playAt(S.queue.length - 1, true);
-    audio.currentTime = base;
+    media.currentTime = base;
     return;
   }
   playAt(S.qi - 1, true);
@@ -411,11 +450,11 @@ export function togglePlay(): void {
     if (S.tracks.length) playList(libraryTracks(), 0);
     return;
   }
-  if (audio.paused)
-    audio.play().catch((e: Error) => {
+  if (media.paused)
+    media.play().catch((e: Error) => {
       logErr('playback', 'Could not resume', e && e.message);
     });
-  else audio.pause();
+  else media.pause();
 }
 
 export function toggleShuffle(): void {
@@ -448,15 +487,15 @@ export function cycleRepeat(): void {
 export function setVolume(v: number): void {
   S.volume = clamp(v, 0, 1);
   S.muted = S.volume === 0 ? S.muted : false;
-  audio.volume = S.volume;
-  audio.muted = S.muted;
+  media.volume = S.volume;
+  media.muted = S.muted;
   savePrefs();
   syncVolumeUI();
 }
 
 export function toggleMute(): void {
   S.muted = !S.muted;
-  audio.muted = S.muted;
+  media.muted = S.muted;
   savePrefs();
   syncVolumeUI();
 }
@@ -510,16 +549,16 @@ export function wireMediaSession(): void {
     }
   };
   set('play', () => {
-    audio.play().catch(() => {
+    media.play().catch(() => {
       /* stay paused */
     });
   });
   set('pause', () => {
-    audio.pause();
+    media.pause();
   });
   set('stop', () => {
-    audio.pause();
-    audio.currentTime = 0;
+    media.pause();
+    media.currentTime = 0;
   });
   set('previoustrack', () => {
     prev();
@@ -528,13 +567,13 @@ export function wireMediaSession(): void {
     next(true);
   });
   set('seekto', (d) => {
-    if (d && typeof d.seekTime === 'number' && isFinite(audio.duration)) audio.currentTime = clamp(d.seekTime, 0, audio.duration);
+    if (d && typeof d.seekTime === 'number' && isFinite(media.duration)) media.currentTime = clamp(d.seekTime, 0, media.duration);
   });
   set('seekbackward', (d) => {
-    audio.currentTime = Math.max(0, audio.currentTime - ((d && d.seekOffset) || 10));
+    media.currentTime = Math.max(0, media.currentTime - ((d && d.seekOffset) || 10));
   });
   set('seekforward', (d) => {
-    if (isFinite(audio.duration)) audio.currentTime = Math.min(audio.duration, audio.currentTime + ((d && d.seekOffset) || 10));
+    if (isFinite(media.duration)) media.currentTime = Math.min(media.duration, media.currentTime + ((d && d.seekOffset) || 10));
   });
 }
 
@@ -580,9 +619,37 @@ export function syncPlayerUI(): void {
     $('#pbArtist').textContent = 'Pick a song to start';
     $('#pbArt').innerHTML = '<div class="ph">' + icon('note') + '</div>';
   }
+  syncFormatChip();
   syncVolumeUI();
   syncTimeUI();
   if (queuePanelOpen()) renderQueuePanel();
+}
+
+/** "Dolby Digital Plus (5.1 · Atmos objects not rendered) · Software
+    decode" while the engine plays the current track; '' on the native path. */
+export function currentFormatLabel(): string {
+  const t = S.current;
+  if (!t || media.path !== 'engine') return '';
+  return engineCodecLabel(t.codec || '', media.engineInfo()) + ' · Software decode';
+}
+
+/** The small "Software decode" chip after the title in the player pill. */
+function syncFormatChip(): void {
+  const el = $('#pbTitle');
+  if (!el) return;
+  let chip = el.querySelector('.soft-chip') as HTMLElement | null;
+  const t = S.current;
+  if (!t || media.path !== 'engine') {
+    if (chip) chip.remove();
+    return;
+  }
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = 'soft-chip';
+    chip.textContent = 'Software decode';
+    el.appendChild(chip);
+  }
+  chip.title = engineCodecLabel(t.codec || '', media.engineInfo()) + ' — decoded in software because this browser has no decoder for it';
 }
 
 /** The scrub window: a virtual track scrubs within [startSec, endSec] of
@@ -590,16 +657,16 @@ export function syncPlayerUI(): void {
 function scrubWindow(): { base: number; span: number } {
   const c = S.current;
   if (c && c.kind === 'virtual') {
-    const end = c.endSec > 0 ? c.endSec : isFinite(audio.duration) && audio.duration > 0 ? audio.duration : c.startSec + (c.duration || 0);
+    const end = c.endSec > 0 ? c.endSec : isFinite(media.duration) && media.duration > 0 ? media.duration : c.startSec + (c.duration || 0);
     return { base: c.startSec, span: Math.max(0, end - c.startSec) };
   }
-  return { base: 0, span: isFinite(audio.duration) && audio.duration > 0 ? audio.duration : c ? c.duration : 0 };
+  return { base: 0, span: isFinite(media.duration) && media.duration > 0 ? media.duration : c ? c.duration : 0 };
 }
 
 function syncTimeUI(): void {
   const w = scrubWindow();
   const d = w.span;
-  const c = clamp((audio.currentTime || 0) - w.base, 0, d > 0 ? d : Infinity);
+  const c = clamp((media.currentTime || 0) - w.base, 0, d > 0 ? d : Infinity);
   if (!seeking) {
     const el = $<HTMLInputElement>('#scrub');
     const ratio = d > 0 ? c / d : 0;
@@ -641,7 +708,7 @@ export function wirePlayerBar(): void {
     const w = scrubWindow();
     if (w.span > 0) {
       try {
-        audio.currentTime = w.base + clamp((Number(scrub.value) / 1000) * w.span, 0, w.span);
+        media.currentTime = w.base + clamp((Number(scrub.value) / 1000) * w.span, 0, w.span);
       } catch {
         /* not seekable yet */
       }
@@ -660,7 +727,7 @@ export function wirePlayerBar(): void {
   const vol = $<HTMLInputElement>('#vol');
   vol.addEventListener('input', () => {
     S.muted = false;
-    audio.muted = false;
+    media.muted = false;
     cancelMainRamp(); /* the user's hand beats a crossfade ramp */
     setVolume(Number(vol.value) / 100);
   });
@@ -670,20 +737,20 @@ export function wirePlayerBar(): void {
 export function wireAudio(): void {
   /* 'play' only means the request was accepted, not that anything decoded, so
      it must NOT clear failStreak — otherwise the skip guard never trips. */
-  audio.addEventListener('play', () => {
+  media.addEventListener('play', () => {
     S.playing = true;
     syncPlayerUI();
     updatePlayingRows();
     startBoundaryLoop();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
-  audio.addEventListener('pause', () => {
+  media.addEventListener('pause', () => {
     S.playing = false;
     syncPlayerUI();
     updatePlayingRows();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   });
-  audio.addEventListener('ended', () => {
+  media.addEventListener('ended', () => {
     /* A finished long file starts from the top next time. */
     const fin = S.current;
     if (fin && fin.kind === 'file' && (fin.duration || 0) > RESUME_MIN_DURATION) {
@@ -698,8 +765,16 @@ export function wireAudio(): void {
        which would let repeat-all spin through a dead queue forever. Wall-clock
        time is the only signal that survives that, so judge on elapsed time. */
     const elapsed = performance.now() - trackLoadedAt;
-    const claimed = (S.current && S.current.duration) || audio.duration || 0;
+    const claimed = (S.current && S.current.duration) || media.duration || 0;
     if (elapsed < 400 && claimed > 2) {
+      const cur = S.current;
+      if (cur && media.path === 'native' && canSoftDecode(cur.codec)) {
+        /* "Played" instantly with nothing decoded: a missing decoder the
+           element did not report as an error. The engine takes it. */
+        markCodecFailed(cur.codec);
+        handToEngine(cur);
+        return;
+      }
       if (S.current) {
         S.current.error = 'No audio in this file';
         logErr('playback', 'No audio in ' + S.current.title, S.current.path + ' — finished instantly but claims ' + Math.round(claimed) + 's');
@@ -710,13 +785,14 @@ export function wireAudio(): void {
     }
     next(false);
   });
-  audio.addEventListener('timeupdate', () => {
+  media.addEventListener('timeupdate', () => {
     syncTimeUI();
     /* Hidden tabs suspend requestAnimationFrame; this ~4 Hz check is the
        coarse safety net that keeps cue boundaries — and the natural-end
        crossfade window — working there. */
-    if (S.current && !audio.paused) checkCrossfadeAdvance(S.current);
-    if (S.current && S.current.kind === 'virtual' && !audio.paused) checkCueBoundary(S.current);
+    if (S.current && !media.paused) checkCrossfadeAdvance(S.current);
+    if (S.current && !media.paused) maybeArmGapless(S.current);
+    if (S.current && S.current.kind === 'virtual' && !media.paused) checkCueBoundary(S.current);
     maybeSaveResume();
     /* Only real elapsed playback clears the failure streak — and proves the
        codec, withdrawing any earlier session verdict against its fourcc.
@@ -725,24 +801,26 @@ export function wireAudio(): void {
        proof would veto the codec mark for the whole session. */
     if (performance.now() - trackLoadedAt > 1200) {
       failStreak = 0;
-      const decodedBytes = (audio as HTMLMediaElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount;
-      if ((decodedBytes === undefined || decodedBytes > 0) && S.current && markCodecWorking(S.current.codec)) {
+      /* Engine playback proves nothing about the browser's own decoder —
+         and must not withdraw the verdict that sent the codec there. */
+      const decodedBytes = media.decodedBytes();
+      if (media.path === 'native' && (decodedBytes === undefined || decodedBytes > 0) && S.current && markCodecWorking(S.current.codec)) {
         logErr('playback', codecLabel(S.current.codec as string) + ' plays after all — removing the codec badge', S.current.path);
         scheduleRender();
       }
     }
     if (S.current && !seeking) {
-      S.lastPos = audio.currentTime;
-      if (Math.floor(audio.currentTime) % 5 === 0) savePrefs();
+      S.lastPos = media.currentTime;
+      if (Math.floor(media.currentTime) % 5 === 0) savePrefs();
     }
   });
-  audio.addEventListener('durationchange', () => {
-    if (S.current && isFinite(audio.duration) && audio.duration > 0 && !S.current.duration) {
-      S.current.duration = audio.duration;
+  media.addEventListener('durationchange', () => {
+    if (S.current && isFinite(media.duration) && media.duration > 0 && !S.current.duration) {
+      S.current.duration = media.duration;
       const cur = S.current;
       void idbGet<TrackRec>(ST_TRACKS, cur.cacheKey).then((rec) => {
         if (rec) {
-          rec.duration = audio.duration;
+          rec.duration = media.duration;
           void idbPut(ST_TRACKS, rec);
         }
       });
@@ -750,10 +828,11 @@ export function wireAudio(): void {
     }
     syncTimeUI();
   });
-  audio.addEventListener('loadedmetadata', () => {
-    if (pendingSeek > 0 && isFinite(audio.duration)) {
+  media.addEventListener('loadedmetadata', () => {
+    syncFormatChip();
+    if (pendingSeek > 0 && isFinite(media.duration)) {
       try {
-        audio.currentTime = clamp(pendingSeek, 0, audio.duration - 0.5);
+        media.currentTime = clamp(pendingSeek, 0, media.duration - 0.5);
       } catch {
         /* not seekable yet */
       }
@@ -761,9 +840,17 @@ export function wireAudio(): void {
     }
     syncTimeUI();
   });
-  audio.addEventListener('error', () => {
+  media.addEventListener('error', () => {
     const t = S.current;
-    const code = audio.error ? audio.error.code : 0;
+    const code = media.error ? media.error.code : 0;
+    /* A genuine native decode failure on a codec the engine handles: mark
+       the fourcc (as before) and hand the same track to the engine at the
+       same position — no skip, no error row. */
+    if (t && media.path === 'native' && (code === 3 || code === 4) && canSoftDecode(t.codec)) {
+      markCodecFailed(t.codec, code === 4);
+      handToEngine(t);
+      return;
+    }
     const why = code === 4 ? 'the browser cannot decode this format' : 'the file could not be read';
     if (t) {
       t.error = 'Could not play this file';
@@ -776,6 +863,99 @@ export function wireAudio(): void {
     }
     skipAfterFailure();
   });
+  media.addEventListener('gaplessadvance', onGaplessAdvance);
+}
+
+/* ---------- native → engine handoff ---------- */
+
+function handToEngine(t: AnyTrack): void {
+  const base = t.kind === 'virtual' ? t.startSec : 0;
+  let at = pendingSeek > 0 ? pendingSeek : media.currentTime > 0 ? media.currentTime : base;
+  if (!(at >= 0) || !isFinite(at)) at = base;
+  pendingSeek = 0;
+  handedOff = t;
+  announceEngine(t.codec as string);
+  scheduleRender();
+  revokeCurrentURL();
+  media.loadEngine(engineSourceOf(t), at);
+  setLoadedSrcKey(refOf(t.folderId, sourcePathOf(t)));
+  trackLoadedAt = performance.now();
+  if (playbackArmed) {
+    void media.play().catch((err: Error & { name?: string }) => {
+      if (err && err.name === 'NotAllowedError') {
+        S.playing = false;
+        syncPlayerUI();
+      }
+      /* engine failures surface through its own 'error' event */
+    });
+  }
+}
+
+/* ---------- gapless between software-decoded files ------------------------
+   Within the last stretch of an engine track, the next queue entry — if it
+   also plays in the engine — is handed over for splicing: its first chunk
+   decodes before this one ends, and the worklet plays straight through.
+   Crossfade, repeat-one and the gapless setting keep precedence exactly as
+   for cue tracks. Mixed native/engine neighbours take a normal change. */
+
+const GAPLESS_ARM_SEC = 15;
+let gaplessArmed = '';
+
+function nextQueueTrack(): AnyTrack | null {
+  const ni = S.qi + 1;
+  if (ni < S.queue.length) return S.queue[ni];
+  return S.repeat === 'all' && S.queue.length ? S.queue[0] : null;
+}
+
+function maybeArmGapless(c: AnyTrack): void {
+  if (media.path !== 'engine') return;
+  const nxt = nextQueueTrack();
+  const want =
+    S.gapless &&
+    !(S.crossfadeSec > 0) &&
+    S.repeat !== 'one' &&
+    c.kind === 'file' &&
+    !!nxt &&
+    nxt.kind === 'file' &&
+    !!nxt.file &&
+    useEngineFor(nxt);
+  const key = want && nxt ? nxt.uid : '';
+  if (key === gaplessArmed) return;
+  if (key) {
+    const end = c.duration || media.duration || 0;
+    if (!(end > 0) || end - media.currentTime > GAPLESS_ARM_SEC) return;
+  }
+  gaplessArmed = key;
+  media.setNext(key && nxt ? engineSourceOf(nxt) : null);
+}
+
+function onGaplessAdvance(): void {
+  const fin = S.current;
+  const nxt = gaplessArmed ? S.queue.find((x) => x.uid === gaplessArmed) || null : null;
+  gaplessArmed = '';
+  if (!nxt) return;
+  if (fin && fin.kind === 'file' && (fin.duration || 0) > RESUME_MIN_DURATION) {
+    fin.resumeSec = 0;
+    void idbDel(ST_META, resumeKeyOf(fin));
+  }
+  const idx = S.queue.indexOf(nxt);
+  if (idx >= 0) S.qi = idx;
+  S.current = nxt;
+  S.lastPos = 0;
+  trackLoadedAt = performance.now();
+  setLoadedSrcKey(refOf(nxt.folderId, sourcePathOf(nxt)));
+  syncPlayerUI();
+  updatePlayingRows();
+  updateMediaSession(nxt);
+  void ensureFullArt(nxt).then(() => {
+    updateMediaSession(nxt);
+  });
+  savePrefs();
+  render();
+  void waveformTrackChanged();
+  lyricsTrackChanged();
+  nowPlayingTrackChanged();
+  offerResume(nxt);
 }
 
 /* ---------- restore the last session ---------- */
@@ -801,8 +981,9 @@ export function restoreLastTrack(): boolean {
   pendingSeek = PREFS.lastPos || 0;
   revokeCurrentURL();
   try {
-    audio.src = createTrackURL(t.file); /* loaded but deliberately paused */
-    audio.load();
+    /* loaded but deliberately paused */
+    if (useEngineFor(t)) media.loadEngine(engineSourceOf(t), 0);
+    else media.loadNative(createTrackURL(t.file));
     setLoadedSrcKey(refOf(t.folderId, sourcePathOf(t)));
   } catch (e) {
     logErr('playback', 'Could not reopen the last track', (e as Error) && (e as Error).message);

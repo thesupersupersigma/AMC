@@ -5,7 +5,7 @@
 
 import type { AnyTrack, ConnectedFolder, FileTrack, PeakData, VirtualTrack } from '../types';
 import { S, refOf } from '../state';
-import { audio } from '../audio/engine';
+import { media } from '../audio/media';
 import { analyzeForSplit } from '../audio/analysis';
 import { bucketPeaks, generateSparseFlacPeaks, loadPeaks, savePeaks } from '../audio/peaks';
 import { extOf } from '../parse/bytes';
@@ -139,7 +139,7 @@ function progressXFor(w: number): number {
   if (!c) return -1;
   const key = refOf(c.folderId, c.kind === 'virtual' ? c.sourcePath : c.path);
   if (key !== curKey) return -1;
-  return (Math.max(0, audio.currentTime || 0) / curDuration) * w;
+  return (Math.max(0, media.currentTime || 0) / curDuration) * w;
 }
 function progressX(): number {
   return canvas ? progressXFor(canvas.width) : -1;
@@ -379,7 +379,7 @@ export function wireSplitEditor(): void {
     const play = target.closest('[data-splitplay]');
     if (play && editorRows[i] && editorTrack && S.current && S.current.file === editorTrack.file) {
       try {
-        audio.currentTime = editorRows[i].startSec;
+        media.currentTime = editorRows[i].startSec;
       } catch {
         /* not seekable */
       }
@@ -387,7 +387,7 @@ export function wireSplitEditor(): void {
   });
   $('#splitAdd').addEventListener('click', () => {
     syncNames();
-    const at = S.current && S.current.file === (editorTrack && editorTrack.file) ? audio.currentTime : 0;
+    const at = S.current && S.current.file === (editorTrack && editorTrack.file) ? media.currentTime : 0;
     editorRows.push({ startSec: Math.max(0, at), title: 'Track ' + String(editorRows.length + 1).padStart(2, '0') });
     editorRows.sort((a, b) => a.startSec - b.startSec);
     renderSplitEditor();

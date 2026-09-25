@@ -4,6 +4,10 @@ import type { Album, AnyTrack, Artist, LyricsSource, MetaRec, MissingTrack, Play
 import { $$, clamp, norm } from './util';
 import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
+import { isEngineCodec } from './audio/mp4samples';
+import { engineSupported } from './audio/soft/support';
+
+export type SpatialModePref = 'auto' | 'headphones' | 'speakers' | 'multichannel';
 
 /** Stored-data schema. 2 = real folderIds everywhere (the Phase 1 'local'
     placeholder is never persisted). 3 = overrides and lyrics key cue-carved
@@ -56,6 +60,9 @@ export interface AppState {
   crossfadeSec: number;
   accent: string;
   lyricsSource: LyricsSource;
+  /** Software decoding for formats the browser can't play natively. */
+  softDecode: boolean;
+  spatialMode: SpatialModePref;
 }
 
 export const S: AppState = {
@@ -77,6 +84,7 @@ export const S: AppState = {
   scanning: false, scanDone: 0, scanTotal: 0,
   hasFolder: false,
   gapless: true, crossfadeSec: 0, accent: '', lyricsSource: 'auto',
+  softDecode: true, spatialMode: 'auto',
 };
 
 /* ---------- album / artist keys ---------- */
@@ -265,6 +273,34 @@ const CODEC_LABELS: Record<string, string> = {
 
 export function codecLabel(codec: string): string {
   return CODEC_LABELS[codec] || codec.toUpperCase();
+}
+
+function layoutName(channels: number): string {
+  if (channels === 1) return 'mono';
+  if (channels === 2) return '2.0';
+  if (channels === 6) return '5.1';
+  if (channels === 8) return '7.1';
+  return channels + ' ch';
+}
+
+/** The label for a track the software engine is playing, from what the
+    decoder actually produced. */
+export function engineCodecLabel(codec: string, info?: { coreChannels: number; joc: boolean; spatial: unknown } | null): string {
+  if (codec === 'alac') return 'Apple Lossless';
+  const ch = info ? layoutName(info.coreChannels) : '';
+  if (codec === 'ec-3') {
+    if (info && info.joc && info.spatial) return 'Dolby Digital Plus (Atmos)';
+    if (info && info.joc) return 'Dolby Digital Plus (' + ch + ' · Atmos objects not rendered)';
+    return ch ? 'Dolby Digital Plus (' + ch + ')' : 'Dolby Digital Plus';
+  }
+  if (codec === 'ac-3') return ch ? 'Dolby Digital (' + ch + ')' : 'Dolby Digital';
+  return codecLabel(codec);
+}
+
+/** The software engine will play this fourcc: the setting is on, the
+    engine runs in this browser, and the codec is one it decodes. */
+export function canSoftDecode(codec?: string): boolean {
+  return !!codec && S.softDecode && isEngineCodec(codec) && engineSupported();
 }
 
 const failedCodecs = new Set<string>();
@@ -463,6 +499,8 @@ export function currentPrefs(): Prefs {
     crossfadeSec: S.crossfadeSec,
     accent: S.accent,
     lyricsSource: S.lyricsSource,
+    softDecode: S.softDecode,
+    spatialMode: S.spatialMode,
   };
 }
 
@@ -504,6 +542,9 @@ export async function seedStateFromPrefs(): Promise<void> {
   S.crossfadeSec = typeof PREFS.crossfadeSec === 'number' ? clamp(PREFS.crossfadeSec, 0, 12) : 0;
   S.accent = typeof PREFS.accent === 'string' ? PREFS.accent : '';
   S.lyricsSource = PREFS.lyricsSource === 'local' || PREFS.lyricsSource === 'off' ? PREFS.lyricsSource : 'auto';
+  S.softDecode = PREFS.softDecode !== false;
+  const sm = PREFS.spatialMode;
+  S.spatialMode = sm === 'headphones' || sm === 'speakers' || sm === 'multichannel' ? sm : 'auto';
   applyAccent(S.accent);
   S.shuffle = !!PREFS.shuffle;
   S.repeat = PREFS.repeat === 'all' || PREFS.repeat === 'one' ? PREFS.repeat : 'off';

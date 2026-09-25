@@ -244,6 +244,15 @@ input[type=range]:hover::-webkit-slider-runnable-track{--fg:var(--accent)}
   background:var(--elevated);color:var(--text-dim);
 }
 
+/* Played by AMC's software decoder: quiet, informational. */
+.soft-chip{
+  display:inline-block;margin-left:7px;padding:0 5px;border-radius:4px;
+  font-size:9.5px;font-weight:600;line-height:1.5;vertical-align:1px;
+  background:rgba(255,255,255,.08);color:var(--text-dim);white-space:nowrap;
+}
+#pbTitle .soft-chip{margin-left:6px;font-size:9px}
+.np-format{font-size:11px;color:rgba(255,255,255,.45);text-align:center;min-height:14px}
+
 /* Codec that failed to decode in this browser session. */
 .codec-badge{
   display:inline-block;margin-left:7px;padding:0 5px;border-radius:4px;

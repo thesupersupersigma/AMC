@@ -36,17 +36,7 @@ export interface SoftEngineOptions {
   devCodecs?: boolean;
 }
 
-/* ---------- capability ---------- */
-
-export function engineSupported(): boolean {
-  return (
-    typeof Worker !== 'undefined' &&
-    typeof WebAssembly !== 'undefined' &&
-    typeof AudioContext !== 'undefined' &&
-    typeof AudioWorkletNode !== 'undefined' &&
-    typeof MessageChannel !== 'undefined'
-  );
-}
+export { engineSupported } from './support';
 
 let workletUrl = '';
 function workletModuleUrl(): string {

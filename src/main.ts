@@ -8,7 +8,8 @@ import './css/lyrics.css';
    after this line is captured. */
 import { logErr, refreshLogUI, toggleErrPanel, wireErrPanel } from './ui/log';
 import { S, seedStateFromPrefs } from './state';
-import { audio, revokeCurrentURL } from './audio/engine';
+import { revokeCurrentURL } from './audio/engine';
+import { media } from './audio/media';
 import { releaseCovers } from './state';
 import { idbOpen } from './db/idb';
 import { $, isTyping } from './util';
@@ -19,6 +20,7 @@ import { navTo, wireLibrary } from './ui/render';
 import { renderPlaylistNav, wireSidebar } from './ui/sidebar';
 import {
   next,
+  playList,
   prev,
   setVolume,
   syncVolumeUI,
@@ -91,13 +93,13 @@ function wireKeyboard(): void {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         if (e.shiftKey) prev();
-        else if (S.current) audio.currentTime = Math.max(0, audio.currentTime - 5);
+        else if (S.current) media.currentTime = Math.max(0, media.currentTime - 5);
         return;
       }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         if (e.shiftKey) next(true);
-        else if (S.current && isFinite(audio.duration)) audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+        else if (S.current && isFinite(media.duration)) media.currentTime = Math.min(media.duration, media.currentTime + 5);
         return;
       }
       if (e.key === 'ArrowUp') {
@@ -169,8 +171,9 @@ async function boot(): Promise<void> {
   /* The database first: prefs and the folder registry live there now. */
   await idbOpen();
   await seedStateFromPrefs();
-  audio.volume = S.volume;
-  audio.muted = S.muted;
+  media.volume = S.volume;
+  media.muted = S.muted;
+  media.setSpatialModeProvider(() => S.spatialMode);
 
   $('#pickBtn').addEventListener('click', addFolderViaPicker);
   $('#addFolderBtn').addEventListener('click', addFolderViaPicker);
@@ -235,6 +238,12 @@ async function boot(): Promise<void> {
   /* Reopen granted folders without a prompt; anything else renders as a
      one-click Reconnect (FSA) or a pick-again row (webkitdir). */
   await restoreFoldersOnBoot();
+}
+
+/* Dev builds only: a handle for the browser tests (test/browser/). The
+   production and single-file builds compile this away. */
+if (import.meta.env.DEV) {
+  (window as unknown as { __amcDebug?: unknown }).__amcDebug = { S, media, playList, next, prev, togglePlay, setVolume };
 }
 
 void boot().catch((e: Error) => {

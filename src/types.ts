@@ -405,6 +405,10 @@ export interface Prefs {
   crossfadeSec?: number;
   accent?: string;
   lyricsSource?: LyricsSource;
+  /** Software decoding for formats this browser can't play (default on). */
+  softDecode?: boolean;
+  /** Spatial audio output for Atmos add-ons: auto | headphones | speakers | multichannel. */
+  spatialMode?: string;
   /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
   /** Folder-qualified successor of lastPath. */
