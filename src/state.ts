@@ -59,6 +59,9 @@ export interface AppState {
   accent: string;
   lyricsSource: LyricsSource;
   artQuality: ArtQuality; // hires-art hook
+  npMode: 'cover' | 'turntable'; // turntable hook
+  ttRpm: number; // turntable hook
+  ttBrake: boolean; // turntable hook
 }
 
 export const S: AppState = {
@@ -81,6 +84,7 @@ export const S: AppState = {
   hasFolder: false,
   gapless: true, crossfadeSec: 0, accent: '', lyricsSource: 'auto',
   artQuality: 'high', // hires-art hook
+  npMode: 'cover', ttRpm: 100 / 3, ttBrake: true, // turntable hook
 };
 
 /* ---------- album / artist keys ---------- */
@@ -468,6 +472,9 @@ export function currentPrefs(): Prefs {
     accent: S.accent,
     lyricsSource: S.lyricsSource,
     artQuality: S.artQuality, // hires-art hook
+    npMode: S.npMode, // turntable hook
+    ttRpm: S.ttRpm, // turntable hook
+    ttBrake: S.ttBrake, // turntable hook
   };
 }
 
@@ -511,6 +518,9 @@ export async function seedStateFromPrefs(): Promise<void> {
   S.lyricsSource = PREFS.lyricsSource === 'local' || PREFS.lyricsSource === 'off' ? PREFS.lyricsSource : 'auto';
   const aq = PREFS.artQuality; // hires-art hook
   S.artQuality = aq === 'low' || aq === 'standard' || aq === 'max' ? aq : 'high'; // hires-art hook
+  S.npMode = PREFS.npMode === 'turntable' ? 'turntable' : 'cover'; // turntable hook
+  S.ttRpm = typeof PREFS.ttRpm === 'number' && PREFS.ttRpm >= 16 && PREFS.ttRpm <= 78 ? PREFS.ttRpm : 100 / 3; // turntable hook
+  S.ttBrake = PREFS.ttBrake !== false; // turntable hook
   applyAccent(S.accent);
   S.shuffle = !!PREFS.shuffle;
   S.repeat = PREFS.repeat === 'all' || PREFS.repeat === 'one' ? PREFS.repeat : 'off';

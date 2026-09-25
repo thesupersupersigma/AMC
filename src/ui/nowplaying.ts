@@ -10,6 +10,7 @@
 import type { AnyTrack } from '../types';
 import { S, coverURL, haveCover } from '../state';
 import { heroArt, heroFor, heroURLNow, setImgDecoded } from '../art/hero'; // hires-art hook
+import { ttDeckMarkup, ttModeButton, ttSpeedMarkup, turntableClick, turntableClosed, turntableOpened, turntableTrackChanged, wireTurntable } from './turntable/turntable'; // turntable hook
 import { audio } from '../audio/engine';
 import { next, prev, togglePlay } from './player';
 import { paintWaveInto } from './waveform';
@@ -149,6 +150,7 @@ function markup(): string {
     '<button type="button" class="np-close pb-btn" id="npClose" title="Close" aria-label="Close Now Playing">' + icon('chev') + '</button>' +
     '<div class="np-inner">' +
     '<div class="np-art"><img id="npArt" alt=""></div>' +
+    ttDeckMarkup() + // turntable hook
     '<div class="np-side">' +
     '<div class="np-title" id="npTitle"></div>' +
     '<div class="np-artist" id="npArtist"></div>' +
@@ -160,7 +162,9 @@ function markup(): string {
     '<button type="button" class="pb-btn np-play" id="npPlay" aria-label="Play or pause"></button>' +
     '<button type="button" class="pb-btn" id="npNext" aria-label="Next">' + icon('next') + '</button>' +
     '<button type="button" class="pb-btn" id="npLyrics" title="Lyrics" aria-label="Lyrics">' + icon('lyrics') + '</button>' +
+    ttModeButton() + // turntable hook
     '</div>' +
+    ttSpeedMarkup() + // turntable hook
     '</div></div>'
   );
 }
@@ -230,11 +234,13 @@ export function openNowPlaying(): void {
   updateAmbient(S.current);
   refreshNow();
   timer = setInterval(refreshNow, 300);
+  turntableOpened(); // turntable hook
 }
 
 export function closeNowPlaying(): void {
   if (!open) return;
   open = false;
+  turntableClosed(); // turntable hook
   if (timer) clearInterval(timer);
   timer = null;
   const view = $('#npview');
@@ -253,6 +259,7 @@ export function closeNowPlaying(): void {
 
 /** Track-change hook from the player: retint always, refresh if open. */
 export function nowPlayingTrackChanged(): void {
+  turntableTrackChanged(); // turntable hook
   updateAmbient(S.current);
   if (open) {
     if (!S.current) closeNowPlaying();
@@ -263,6 +270,7 @@ export function nowPlayingTrackChanged(): void {
 /* ---------- wiring ---------- */
 
 export function wireNowPlaying(): void {
+  wireTurntable(); // turntable hook
   $('#pbArt').addEventListener('click', () => {
     if (S.current) openNowPlaying();
   });
@@ -272,6 +280,7 @@ export function wireNowPlaying(): void {
   const view = $('#npview');
   view.addEventListener('click', (e) => {
     const target = e.target as Element;
+    if (turntableClick(target)) return; // turntable hook
     if (target.closest('#npClose')) {
       closeNowPlaying();
       return;

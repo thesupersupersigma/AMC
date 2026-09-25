@@ -409,6 +409,9 @@ export interface Prefs {
   accent?: string;
   lyricsSource?: LyricsSource;
   artQuality?: ArtQuality; // hires-art hook
+  npMode?: 'cover' | 'turntable'; // turntable hook
+  ttRpm?: number; // turntable hook
+  ttBrake?: boolean; // turntable hook
   /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
   /** Folder-qualified successor of lastPath. */
