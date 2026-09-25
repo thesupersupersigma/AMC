@@ -11,12 +11,21 @@ import { bedPositions, multichannelLayout, type SpeakerLayout } from './layouts'
 import { layeredGains, prepareVbap, stereoGains } from './panning';
 import type { Track } from './timeline';
 
-/** Per-mode make-up gain, so the rendered loudness sits close to a
-    standard downmix of the core. Measured by test/atmos/render.test.ts. */
+/** Per-mode make-up gain. Calibrated by the contract harness
+    (test/atmos/harness.test.ts) on real Atmos music, so each mode sits
+    about 2 dB under what the engine plays without Atmos (BS.1770 loudness):
+    headphones/speakers vs the core's standard stereo downmix, multichannel
+    vs the 5.1 core. That keeps switching Atmos on and off level-neutral
+    within a couple of dB and leaves peak headroom:
+      headphones   −3.0 dB  Chrome's HRTF filters add about +4 dB of
+                            K-weighted loudness over plain panning
+      speakers     +0.9 dB
+      multichannel +1.0 dB  most of the processor's −3 dB object gain
+                            (Cavern's .707) comes back */
 export const makeupGain: Record<SpatialOutputMode, number> = {
-  headphones: 1.0,
-  speakers: 1.0,
-  multichannel: 1.0,
+  headphones: 0.71,
+  speakers: 1.11,
+  multichannel: 1.12,
 };
 
 /** LFE level when there is no LFE speaker (−6 dB). */

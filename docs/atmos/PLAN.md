@@ -272,3 +272,68 @@ are walked.
   differs from Cavern's (no DRC) by 2.3% RMS relative, or 0.6% with
   `-drc_scale 0`. The objects follow whatever core they are given, so this is
   the engine's call.
+
+## 8. Contract harness (gate 5)
+
+`test/atmos/harness.ts` plays the real file the way the engine will:
+
+- Node slices each access unit from the MP4 and decodes the core with the
+  system ffmpeg.
+- A real Web Worker in headless Chromium imports `register.ts` and takes the
+  processor from the registry. It reads `maxChannels`, calls `process()` per
+  packet and transfers each block back, which detaches the processor's
+  buffers.
+- The main thread takes the renderer from the registry and plays the blocks
+  back to back as the Worklet would. It relays keyframes stamped with each
+  block's start frame 0.5 s ahead, calls `setPlayedFrame` every ~107 ms,
+  resets both sides on a seek, and renders offline.
+
+First 60 s, with a seek at 30 s:
+
+| | |
+|---|---|
+| Worker realm | no `window`, no `document`; 1875 blocks, 3750 keyframes; 15.9× realtime inside Chromium's Worker; 0 fallback scans, 0 held frames |
+| headphones | −18.8 LKFS, peak 0.925, no clipping; correlates 0.71 with the core at 577 + 295 samples (the QMF delay plus Chrome's HRTF latency) |
+| speakers | −18.8 LKFS, peak 0.847; correlates **0.98–0.99** with the core's stereo downmix (577-sample delay) |
+| multichannel 7.1.4 | −20.8 LKFS against the 5.1 core's −18.7, peak 0.537 |
+| reference | core stereo downmix −16.9 LKFS, which itself peaks at 1.10 |
+
+Make-up gains (`render/graphs.ts`) put every mode 2 dB under what the
+engine plays without Atmos. A cross-track seek (10 s → 40 s) plays on with
+no dropouts. The WAVs (`test/private/atmos-{headphones,speakers}.wav`) are
+never committed.
+
+## 9. Wiring it in (for the merge step)
+
+Worker:
+```ts
+import './spatial/register';                       // registers both factories
+const factory = getSpatialProcessorFactory();
+const proc = factory?.({ codec: 'ec-3', sampleRate, coreChannels: 6, dec3 }); // null → plain 5.1
+// Size the Worklet for proc.maxChannels (17 for this track: LFE + 16 object slots).
+const block = proc.process(packetBytes, planarCorePcm);   // per access unit
+// post block.pcm (transferable), block.keyframes, block.bedChannels to main
+proc.reset();   // on seek / flush, before the next process()
+proc.dispose(); // on track change
+```
+Main thread:
+```ts
+const renderer = getSpatialRendererFactory()!(ctx, 1, proc.maxChannels - 1);
+workletNode.connect(renderer.input); renderer.output.connect(engineGain);
+renderer.setMode(ctx.destination.maxChannelCount >= 6 ? 'multichannel' : userPrefersHeadphones ? 'headphones' : 'speakers');
+renderer.pushKeyframes(blockStartPlayedFrame, block.keyframes); // as each block is queued
+renderer.setPlayedFrame(workletPlayedFrames);                  // from Worklet position messages, ≥ 10 Hz
+renderer.reset();                                              // on seek
+```
+- Labels: `atmosCodecLabel(n)`, where `n` is the object count. That count is
+  not in the contract. The processor exposes it as `stats.objects` (15 here);
+  `maxChannels − 1` is the upper bound. `atmosActivityLine(mode)` is the log
+  line. `ATMOS_CREDIT` holds the licence credit (text + link) for Settings or
+  About.
+- Headphones vs speakers can't be detected by a browser. It has to be a
+  setting, with 'speakers' as the renderer's default.
+- After a seek, object output restarts 12 ms late (the QMF warm-up), and
+  Chrome's HRTF adds ~6 ms of its own latency in headphones mode. A short
+  fade-in on seek would hide the first; the second doesn't matter for sync.
+- No limiter is included. On this loud master, headphones peak at −0.7 dBFS.
+  If the engine has a master limiter, put it after `renderer.output`.
