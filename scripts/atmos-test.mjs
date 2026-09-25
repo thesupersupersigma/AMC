@@ -11,8 +11,7 @@
 
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,7 +35,9 @@ const files = readdirSync(testDir)
   .filter((f) => f.endsWith('.test.ts'))
   .filter((f) => filters.length === 0 || filters.some((x) => f.includes(x)))
   .sort();
-const out = mkdtempSync(join(tmpdir(), 'atmos-tests-'));
+// Inside node_modules (git-ignored) so bundled tests can resolve packages.
+const out = join(root, 'node_modules/.cache/atmos-tests');
+mkdirSync(out, { recursive: true });
 let failed = 0;
 for (const f of files) {
   const outfile = join(out, f.replace(/\.ts$/, '.mjs'));
@@ -48,6 +49,7 @@ for (const f of files) {
     target: 'node20',
     outfile,
     sourcemap: 'inline',
+    packages: 'external',
     logLevel: 'error',
   });
   console.log(`\n${f}`);

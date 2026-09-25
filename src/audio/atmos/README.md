@@ -37,8 +37,11 @@ Source repository: <https://github.com/VoidXH/Cavern>, ported from commit
 
 AMC-original code in this folder, still distributed under Cavern's licence as
 part of it: `bitstream/dec3.ts` (the `dec3` box, ETSI TS 102 366 Annex F),
-`processor.ts` (the `SpatialProcessor` glue), `render/` apart from the bed
-positions, and `labels.ts`.
+`processor.ts` (the `SpatialProcessor` glue), `render/` (`index.ts`,
+`graphs.ts`, `panning.ts`, `timeline.ts`, and `layouts.ts` apart from the
+bed positions), and `labels.ts`. Cavern's own rendering (its HRTF, IRs and
+speaker renderer) is not used: headphones go through Chrome's built-in
+HRTF `PannerNode`, and the speaker modes use AMC's own amplitude panning.
 
 Where this port deliberately differs from Cavern, the code says
 `DEVIATION` and explains why. Passing `cavernCompat: true` to the processor

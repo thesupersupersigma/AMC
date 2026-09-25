@@ -166,6 +166,25 @@ irreducible filterbank work. `test/atmos/bench.test.ts` re-measures it.
   report.
 - **Mode switch**: two graphs (old and new) crossfade over 30 ms, then the old
   one is disconnected.
+
+Verified at gate 4 in headless Chromium 141 (`test/atmos/render.test.ts`):
+a synthetic object moves left → right → overhead through an
+`OfflineAudioContext`, with keyframes relayed per 1536-frame block and the
+played frame reported every ~107 ms.
+
+- **Headphones**: at the left, ILD +13.6 dB and ITD +0.69 ms; mirrored at the
+  right; overhead 0 dB / 0 ms. During a 180°/s sweep, Chrome's HRTF
+  `PannerNode` trails the object by about 38 ms. That is its own
+  azimuth-change smoothing; the automation itself is on time.
+- **Speakers**: hard L → hard R, crossing the centre within 2 ms of the
+  keyframes. Overhead is centred and 1.3 dB quieter (height folded in).
+- **Multichannel 7.1.4**: the sides land 94% on SL/SR, overhead 25% on each
+  top speaker, and nothing goes to the LFE. In 7.1, overhead folds to FC.
+- **Sync**: a simulated 200 ms Worklet underrun shifts the automation by
+  exactly 200 ms, because the renderer re-anchors on the next
+  `setPlayedFrame`.
+- **Mode switch**: headphones → speakers → headphones with a steady sine
+  gives no roughness spike at either switch (0.7× the median).
 - Nothing touches `AudioContext`, `window` or `document` at import time: the
   module is safe to import in the Worker.
 
