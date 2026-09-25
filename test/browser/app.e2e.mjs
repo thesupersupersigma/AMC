@@ -190,6 +190,39 @@ test('Settings: turning software decoding off restores today’s behaviour', asy
   assert.equal(await page.evaluate(() => window.__amcDebug.S.softDecode), true);
 });
 
+test('Settings: "Spatial audio output" appears only once a renderer is registered, and persists', async () => {
+  await page.click('#settingsBtn');
+  await page.waitForSelector('[data-set="softdecode"]');
+  assert.equal(await page.$('[data-set-spatial]'), null, 'hidden without a spatial add-on');
+  await page.evaluate(async () => {
+    const c = await import('/src/audio/spatial/contract.ts');
+    c.registerSpatial(
+      () => null,
+      (ctx) => {
+        const g = ctx.createGain();
+        return { input: g, output: g, setMode() {}, pushKeyframes() {}, setPlayedFrame() {}, reset() {}, dispose() {} };
+      }
+    );
+  });
+  await page.click('text=Albums');
+  await page.click('#settingsBtn');
+  await page.waitForSelector('[data-set-spatial]');
+  const options = await page.$$eval('[data-set-spatial] option', (os) => os.map((o) => o.textContent));
+  assert.deepEqual(options, ['Auto', 'Headphones', 'Speakers', 'Multichannel']);
+  assert.equal(await page.$eval('[data-set-spatial]', (el) => el.value), 'auto');
+  await page.selectOption('[data-set-spatial]', 'headphones');
+  await sleep(500);
+  const saved = await page.evaluate(() => {
+    const raw = localStorage.getItem('tsss_player_prefs');
+    return { state: window.__amcDebug.S.spatialMode, stored: raw ? JSON.parse(raw).spatialMode : null };
+  });
+  assert.deepEqual(saved, { state: 'headphones', stored: 'headphones' });
+  await page.evaluate(async () => {
+    const c = await import('/src/audio/spatial/contract.ts');
+    c.registerSpatial(null, null);
+  });
+});
+
 test('no page errors', () => {
   assert.deepEqual(pageErrors, []);
 });

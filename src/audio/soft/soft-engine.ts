@@ -34,14 +34,29 @@ export interface SoftEngineOptions {
   allowWebCodecs?: boolean;
   /** Dev/test only: accept FLAC-in-MP4 (WebCodecs) as an engine codec. */
   devCodecs?: boolean;
+  /** Test only: a Worker running startDecodeWorker with extra
+      registrations (test/spatial/ proves the spatial hook this way). */
+  createWorker?: () => Worker;
 }
 
 export { engineSupported } from './support';
 
+/* The worklet module is generated source text (see worklet.ts), loaded
+   from a Blob URL — and, where the browser refuses Blob-URL worklets (a
+   single-file build opened from file://, whose origin is opaque), from a
+   data: URL, which Chromium accepts there. */
 let workletUrl = '';
-function workletModuleUrl(): string {
+async function addWorkletModule(ctx: AudioContext): Promise<void> {
   if (!workletUrl) workletUrl = URL.createObjectURL(new Blob([workletSource()], { type: 'text/javascript' }));
-  return workletUrl;
+  try {
+    await ctx.audioWorklet.addModule(workletUrl);
+  } catch (first) {
+    try {
+      await ctx.audioWorklet.addModule('data:text/javascript;charset=utf-8,' + encodeURIComponent(workletSource()));
+    } catch {
+      throw first;
+    }
+  }
 }
 
 const TIMEUPDATE_MS = 250;
@@ -176,7 +191,7 @@ export class SoftEngine extends EventTarget {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const w = createDecodeWorker();
+    const w = this.opts.createWorker ? this.opts.createWorker() : createDecodeWorker();
     w.onmessage = (e: MessageEvent) => this.onWorker(e.data as FromWorker);
     w.onerror = (e: ErrorEvent) => {
       this.log('The decode worker failed', e.message || 'unknown error');
@@ -403,7 +418,7 @@ export class SoftEngine extends EventTarget {
     }
     try {
       if (!this.modules.has(ctx)) {
-        await ctx.audioWorklet.addModule(workletModuleUrl());
+        await addWorkletModule(ctx);
         this.modules.add(ctx);
       }
     } catch (e) {

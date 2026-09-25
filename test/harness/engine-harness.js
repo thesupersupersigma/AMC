@@ -2,6 +2,8 @@
    for test/browser/engine.e2e.mjs (window.H). */
 import { SoftEngine, analyzeWithEngine, generateEnginePeaks } from '../../src/audio/soft/soft-engine.ts';
 import { silencesFromRms } from '../../src/audio/analysis.ts';
+import { registerSpatial } from '../../src/audio/spatial/contract.ts';
+import { makeTestRenderer } from '../spatial/test-processor.ts';
 import { buildMp4, alacAtom, dec3Box, eac3Frame } from '../helpers/mp4build.mjs';
 import { alacPackets, testPcm } from '../helpers/alac.mjs';
 import { flacTrack, sinePcm } from '../helpers/flac.mjs';
@@ -38,11 +40,11 @@ function alacSineFile(name, { seconds = 3, offset = 0, rate = 44100 } = {}) {
   const { bytes } = buildMp4([{ handler: 'soun', codec: 'alac', timescale: rate, sampleRate: rate, channels: 2, sampleSize: 16, config: alacAtom({ sampleRate: rate }), samples: packets, durations }]);
   return new File([bytes], name, { type: 'audio/mp4' });
 }
-function eac3File(name, seconds = 20) {
+function eac3File(name, seconds = 20, joc = true) {
   const n = Math.ceil((seconds * 48000) / 1536);
   const frames = Array.from({ length: n }, () => eac3Frame());
   const { bytes } = buildMp4([
-    { handler: 'soun', codec: 'ec-3', timescale: 48000, sampleRate: 48000, channels: 2, config: dec3Box({ joc: true }), samples: frames, durations: frames.map(() => 1536), samplesPerChunk: 20 },
+    { handler: 'soun', codec: 'ec-3', timescale: 48000, sampleRate: 48000, channels: 2, config: dec3Box({ joc }), samples: frames, durations: frames.map(() => 1536), samplesPerChunk: 20 },
   ]);
   return new File([bytes], name, { type: 'audio/mp4' });
 }
@@ -125,6 +127,24 @@ window.H = {
     engine.setTap(null);
   },
   log,
+  spatialLog: null,
+  /** Test-only spatial add-on: renderer registered in this realm, the
+      processor in a Worker built from test/spatial/spatial-worker.ts. */
+  newSpatialEngine() {
+    const log = { created: [], modes: [], keyframes: [], played: [], resets: 0, disposed: 0 };
+    registerSpatial(() => null, makeTestRenderer(log));
+    this.spatialLog = log;
+    engine.dispose();
+    engine = makeEngine({
+      createWorker: () => new Worker(new URL('../spatial/spatial-worker.ts', import.meta.url), { type: 'module' }),
+      spatialMode: () => 'headphones',
+    });
+    return engine;
+  },
+  clearSpatial() {
+    registerSpatial(null, null);
+    this.spatialLog = null;
+  },
   generateEnginePeaks,
   analyzeWithEngine,
   silencesFromRms,

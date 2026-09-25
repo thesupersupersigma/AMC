@@ -127,7 +127,7 @@ const engineAnnounced = new Set<string>();
 function announceEngine(codec: string): void {
   if (engineAnnounced.has(codec)) return;
   engineAnnounced.add(codec);
-  logErr('playback', codec + " isn't supported natively here — using software decoding", codecLabel(codec));
+  logErr('playback', codec + " isn't supported natively here — using software decoding", engineCodecLabel(codec));
 }
 
 function loadTrack(t: AnyTrack, autoplay: boolean): void {

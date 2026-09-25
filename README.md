@@ -32,6 +32,15 @@ them.
 durations parsed from scratch: FLAC Vorbis comments and PICTURE blocks, MP4
 `ilst` atoms, ID3v2.
 
+**Software decoding** — Apple Lossless (ALAC) and Dolby Digital / Dolby
+Digital Plus (AC-3, E-AC-3, including Atmos editions, which play their 5.1
+bed) in `.m4a`, when the browser has no decoder of its own. AMC always tries the
+browser first; on a genuine decode failure it hands the same track to its
+own engine at the same position (a Worker decoding with WebCodecs or a
+WebAssembly build of FFmpeg's decoders, playing through an AudioWorklet),
+with gapless, crossfade, waveform, lyrics and media keys all intact.
+Switchable in Settings. See [`docs/engine/`](docs/engine/ENGINE.md).
+
 **Cue sheets** — vinyl rips work properly. One long FLAC plus a `.cue` becomes
 real tracks with real names, and playback crosses boundaries **gaplessly**
 because it never re-seeks within a rip. Embedded FLAC CUESHEET blocks, sibling

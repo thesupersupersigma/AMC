@@ -459,6 +459,86 @@ test('track-break analysis streams the whole file and finds the gap', async () =
   assert.ok(Math.abs(r.proposals[0] - 5.85) < 0.06, 'proposal ' + r.proposals[0]);
 });
 
+test('spatial hook: a test processor sizes the worklet, feeds the renderer, resets on seek and track change', async () => {
+  const r = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+    const e = H.newSpatialEngine();
+    const log = H.spatialLog;
+    H.load(H.eac3File('atmos.m4a', 20), 'ec-3');
+    H.startTap();
+    await e.play();
+    await sleep(1500);
+    H.stopTap();
+    const st1 = e.debugState();
+    let objMin = 1;
+    let objMax = -1;
+    for (const blk of H.captured.slice(2)) {
+      const o = blk.planes[6];
+      if (!o) continue;
+      for (const v of o) {
+        objMin = Math.min(objMin, v);
+        objMax = Math.max(objMax, v);
+      }
+    }
+    const tapChannels = H.captured.length ? H.captured[H.captured.length - 1].planes.length : 0;
+    const kf1 = log.keyframes.slice();
+    const played1 = log.played.slice();
+    const rendererResets1 = log.resets;
+    e.currentTime = 10;
+    await sleep(1200);
+    const kfSeek = log.keyframes.slice(kf1.length);
+    const rendererResets2 = log.resets;
+    H.load(H.eac3File('atmos-2.m4a', 10), 'ec-3');
+    await e.play();
+    await sleep(1200);
+    const kfTrack = log.keyframes.slice(kf1.length + kfSeek.length);
+    const rendererResets3 = log.resets;
+    H.load(H.eac3File('plain.m4a', 10, false), 'ec-3');
+    await e.play();
+    await sleep(1000);
+    const plain = e.debugState();
+    const out = {
+      st1: { spatial: st1.spatial, nodeChannels: st1.nodeChannels, info: st1.info.spatial, channels: st1.info.channels },
+      created: log.created,
+      modes: log.modes,
+      objMin,
+      objMax,
+      tapChannels,
+      kf1: kf1.slice(0, 40),
+      played1: [played1[0], played1[played1.length - 1]],
+      kfSeekX: kfSeek.map((k) => k.x),
+      kfTrackX: kfTrack.map((k) => k.x),
+      resets: [rendererResets1, rendererResets2, rendererResets3],
+      plain: { spatial: plain.spatial, nodeChannels: plain.nodeChannels, info: plain.info.spatial },
+      disposed: log.disposed,
+    };
+    H.clearSpatial();
+    H.newEngine();
+    return out;
+  });
+  assert.deepEqual(r.st1.info, { maxChannels: 7, bedChannels: 6, objectChannels: 1 });
+  assert.equal(r.st1.channels, 7);
+  assert.equal(r.st1.nodeChannels, 7, 'worklet sized to maxChannels');
+  assert.equal(r.st1.spatial, true, 'renderer inserted');
+  assert.deepEqual(r.created[0], { bed: 6, objects: 1 });
+  assert.ok(r.modes.includes('headphones'), 'setMode applied: ' + r.modes);
+  assert.equal(r.tapChannels, 7);
+  assert.ok(Math.abs(r.objMin - 0.25) < 1e-6 && Math.abs(r.objMax - 0.25) < 1e-6, 'object channel played from SpatialBlock.pcm: ' + r.objMin + '..' + r.objMax);
+  /* Keyframes arrive one per packet, stamped on the stream timeline the
+     renderer's played frames use. */
+  for (let i = 1; i < r.kf1.length; i++) assert.equal(r.kf1[i].blockStartFrame - r.kf1[i - 1].blockStartFrame, 1536, 'consecutive blocks');
+  assert.ok(r.kf1[0].blockStartFrame <= r.played1[1] && r.kf1[0].blockStartFrame >= r.played1[0] - 1536, 'same timeline: ' + r.kf1[0].blockStartFrame + ' vs played ' + r.played1);
+  const x1 = Math.max(...r.kf1.map((k) => k.x));
+  assert.ok(Math.min(...r.kfSeekX) > x1, 'processor.reset() on seek: ' + x1 + ' → ' + r.kfSeekX.slice(0, 3));
+  assert.ok(r.resets[1] > r.resets[0], 'renderer.reset() on seek');
+  assert.ok(r.kfTrackX.length > 0 && Math.max(...r.kfTrackX) <= 2, 'a fresh processor for the next track: ' + r.kfTrackX.slice(0, 3));
+  assert.ok(r.resets[2] > r.resets[1], 'renderer.reset() on track change');
+  assert.equal(r.plain.info, null, 'non-JOC stream: no processor');
+  assert.equal(r.plain.spatial, false, 'renderer removed');
+  assert.equal(r.plain.nodeChannels, 6, 'plain 5.1 core');
+  assert.ok(r.disposed >= 1);
+});
+
 test('no page errors', () => {
   assert.deepEqual(pageErrors, []);
 });
