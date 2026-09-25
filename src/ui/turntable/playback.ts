@@ -209,6 +209,19 @@ export function interceptTransport(h: TransportHooks | null): void {
   el.play = () => h.play(realPlay);
 }
 
+/* ---------- media events the deck follows ---------- */
+
+/** Playback jumped (a seek landed). */
+export function onSeeked(cb: () => void): void {
+  audio.addEventListener('seeked', cb);
+}
+
+/** The loaded file's duration became known or changed. */
+export function onDurationKnown(cb: () => void): void {
+  audio.addEventListener('durationchange', cb);
+  audio.addEventListener('loadedmetadata', cb);
+}
+
 /* ---------- track changes ---------- */
 
 type TrackCb = (t: AnyTrack | null, prev: AnyTrack | null) => void;

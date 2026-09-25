@@ -6,7 +6,7 @@ import type { AnyTrack } from '../../types';
 import { S, coverURL } from '../../state';
 import { heroFor, heroURLNow, setImgDecoded } from '../../art/hero';
 import * as pb from './playback';
-import { armAngleFor, DEG_PER_SEC, REST_DEG } from './geometry';
+import { armMoveTo, noteJump, paintBands, seekedByHand, startMotion, stopMotion, wireArmInput } from './motion';
 import { modeButtonMarkup, npMode, setNpMode, speedMarkup, syncModeButton, turntableMarkup } from './view';
 
 let npOpen = false;
@@ -57,42 +57,19 @@ function paintAlbum(key: string): void {
   }
 }
 
-/* ---------- static placement (the frame loop drives these in motion) ---------- */
-
-export function setPlatterAngle(deg: number): void {
-  const platter = document.getElementById('ttPlatter');
-  const spin = document.getElementById('ttRecSpin');
-  const t = 'rotate(' + (deg % 360).toFixed(2) + 'deg)';
-  if (platter) platter.style.transform = t;
-  if (spin) spin.style.transform = t;
-}
-
-export function setArmAngle(deg: number): void {
-  const arm = document.getElementById('ttArm');
-  if (arm) arm.style.transform = 'rotate(' + deg.toFixed(3) + 'deg)';
-}
-
-function sideFraction(): number {
-  const d = pb.getDuration();
-  return d > 0 ? pb.getTime() / d : 0;
-}
-
-function placeStatic(): void {
-  setPlatterAngle(pb.getTime() * DEG_PER_SEC);
-  setArmAngle(S.current ? armAngleFor(sideFraction()) : REST_DEG);
-}
-
 /* ---------- entering / leaving the mode ---------- */
 
 function enter(): void {
   active = true;
   pb.primeTrack();
   paintAlbum(S.current ? S.current.coverKey : '');
-  placeStatic();
+  paintBands();
+  startMotion();
 }
 
 function leave(): void {
   active = false;
+  stopMotion();
 }
 
 function applyMode(): void {
@@ -122,8 +99,19 @@ export function turntableTrackChanged(): void {
 
 pb.onTrackChange((t: AnyTrack | null) => {
   if (!active) return;
-  paintAlbum(t ? t.coverKey : '');
-  placeStatic();
+  noteJump();
+  paintBands();
+  if ((t ? t.coverKey : '') !== shownKey) paintAlbum(t ? t.coverKey : '');
+  /* The arm follows the new position with a quick lift → move → drop —
+     unless the listener just put it there by hand. */
+  if (!seekedByHand()) armMoveTo(null, 600);
+});
+
+pb.onSeeked(() => {
+  if (active) noteJump();
+});
+pb.onDurationKnown(() => {
+  if (active) paintBands();
 });
 
 /** Routes clicks inside the Now Playing view; true when handled. */
@@ -139,4 +127,5 @@ export function turntableClick(target: Element): boolean {
 
 export function wireTurntable(): void {
   pb.wirePlayback();
+  wireArmInput();
 }
