@@ -8,7 +8,8 @@
    opacity; prefers-reduced-motion disables the transitions in CSS. */
 
 import type { AnyTrack } from '../types';
-import { FULL, S, coverURL, haveCover } from '../state';
+import { S, coverURL, haveCover } from '../state';
+import { heroArt, heroFor, heroURLNow, setImgDecoded } from '../art/hero'; // hires-art hook
 import { audio } from '../audio/engine';
 import { next, prev, togglePlay } from './player';
 import { paintWaveInto } from './waveform';
@@ -176,10 +177,14 @@ function refreshNow(): void {
     if (art) art.removeAttribute('src');
     return;
   }
-  const url = FULL.key === t.coverKey && FULL.url ? FULL.url : coverURL(t.coverKey);
-  if (art) {
-    if (url) art.src = url;
-    else art.removeAttribute('src');
+  /* hires-art hook: the hero once minted (decoded before it swaps in),
+     the thumb until then. */
+  const url = heroURLNow(t) || coverURL(t.coverKey);
+  if (art) setImgDecoded(art, url);
+  if (!heroArt(t)) {
+    void heroFor(t).then((h) => {
+      if (h && open && S.current === t) refreshNow();
+    });
   }
   const title = document.getElementById('npTitle');
   const artist = document.getElementById('npArtist');

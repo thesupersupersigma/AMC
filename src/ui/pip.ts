@@ -10,6 +10,7 @@ import { audio } from '../audio/engine';
 import { next, prev, togglePlay } from './player';
 import { icon, solid } from './icons';
 import { fmtTime, $ } from '../util';
+import { heroURLNow } from '../art/hero'; // hires-art hook
 
 interface DocPiP {
   requestWindow(opts?: { width?: number; height?: number }): Promise<Window>;
@@ -98,7 +99,7 @@ function pipUpdate(): void {
   set('title', t.title);
   set('artist', t.artist);
   const art = d.getElementById('art') as HTMLImageElement | null;
-  const url = coverURL(t.coverKey);
+  const url = heroURLNow(t) || coverURL(t.coverKey); // hires-art hook
   if (art && art.getAttribute('src') !== url) {
     if (url) art.src = url;
     else art.removeAttribute('src');

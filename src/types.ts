@@ -394,6 +394,9 @@ export interface CoverRec {
 
 export type LyricsSource = 'auto' | 'local' | 'off';
 
+/** Hero artwork size level — Settings › Artwork. */ // hires-art hook
+export type ArtQuality = 'low' | 'standard' | 'high' | 'max'; // hires-art hook
+
 export interface Prefs {
   volume?: number;
   muted?: boolean;
@@ -405,6 +408,7 @@ export interface Prefs {
   crossfadeSec?: number;
   accent?: string;
   lyricsSource?: LyricsSource;
+  artQuality?: ArtQuality; // hires-art hook
   /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
   /** Folder-qualified successor of lastPath. */
