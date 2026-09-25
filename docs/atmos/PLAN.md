@@ -15,6 +15,14 @@ Reference implementation: [Cavern](https://github.com/VoidXH/Cavern) by VoidX
 
 - Every MP4 sample is one 3072-byte E-AC-3 syncframe: independent substream 0,
   `acmod` 7 + LFE, 6 blocks (1536 samples). No dependent substream.
+- `dec3` = `18 00 20 0f 00 01 10`: 768 kb/s, one independent substream,
+  `flag_ec3_extension_type_a` = 1, `complexity_index_type_a` = 16.
+- JOC: 15 objects over a 5-channel core (`joc_dmx_config_idx` 0), 12 parameter
+  bands, fine or coarse quantisation, 1 data point, no sparse coding, no steep
+  slopes. So Cavern's unusual code paths (§6.4, §6.5) never run on this track.
+- OAMD: 16 objects = an LFE-only bed + 15 dynamic objects (one per JOC
+  object). One object element per frame, with one info block at offset 0 and
+  a 1536-sample ramp.
 - `auxdatae` is 0 in every frame checked. The EMDF container (sync `0x5838`)
   sits at a single, non-byte-aligned bit position inside an audio block's
   **skip field** (`skipfld`). Reaching the skip field of block *n* means
@@ -177,6 +185,32 @@ fixes it, and each fix is marked `DEVIATION` in the code.
 5. Sparse-coded JOC objects are decoded as silence, on purpose (Cavern:
    "documentation is incorrect"). Both modes keep this, and `process` counts
    such frames so the harness can report them.
+6. `EnhancedAC3Body.ReadAux` passes `auxdatal` (a length in *bits*) to
+   `ReadBytesInto`, which reads that many *bytes*. The default reads
+   `auxdatal >> 3` bytes. The test file has no aux data.
+7. `ParseSPX` re-creates `spxbndstrc` right after `ReadSPX` filled it, so the
+   transmitted spectral-extension band structure is discarded. That would
+   desync the walk on SPX streams with a non-trivial band structure. It is
+   mirrored in both modes, because a wrong fix is worse than a known quirk.
+   `access-unit.ts` falls back to a bit-level EMDF scan whenever a walk
+   fails (see below). The test file uses no SPX.
+8. `EnhancedAC3Decoder.DecodeFrame` resets "has objects" for every
+   substream, so a dependent substream without EMDF would hide JOC in the
+   independent one. By default, a JOC payload in any substream of the access
+   unit counts.
+9. Timing: Cavern's `BlockBuffer` fetches frame *k+1* while serving frame
+   *k*'s last 64 samples, so each frame's OAMD update is applied one
+   timeslot (64 samples) early, and object positions ignore the QMF delay.
+   AMC schedules OAMD at its own sample offsets on the output timeline, QMF
+   delay included.
+
+**Fallback (AMC-original).** If a syncframe's audio blocks can't be walked
+(AHT, enhanced coupling or stereo rematrixing, which Cavern also rejects, or
+corruption), `ExtensibleMetadataDecoder.scanFrame` looks for an EMDF
+container at every bit position and accepts one only if the EMDF and JOC
+parse succeeds. That covers the common layout where the container sits in a
+single skip field. On the test file it is never needed: all 8,689 syncframes
+are walked.
 
 ## 7. Contract notes for the merge step (contract not edited)
 
