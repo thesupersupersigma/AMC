@@ -6,7 +6,9 @@ import type { AnyTrack } from '../../types';
 import { S, coverURL } from '../../state';
 import { heroFor, heroURLNow, setImgDecoded } from '../../art/hero';
 import * as pb from './playback';
-import { armMoveTo, noteJump, paintBands, seekedByHand, startMotion, stopMotion, wireArmInput } from './motion';
+import { armMoveTo, frameStats, noteJump, paintBands, resetFrameStats, seekedByHand, startMotion, stopMotion, wireArmInput } from './motion';
+import { cancelSwap, swapRunning, swapTo } from './swap';
+import { speedClick, speedEnter, speedLeave, wireSpeedInput } from './speed';
 import { modeButtonMarkup, npMode, setNpMode, speedMarkup, syncModeButton, turntableMarkup } from './view';
 
 let npOpen = false;
@@ -64,12 +66,21 @@ function enter(): void {
   pb.primeTrack();
   paintAlbum(S.current ? S.current.coverKey : '');
   paintBands();
+  speedEnter();
+  resetFrameStats();
   startMotion();
 }
 
 function leave(): void {
   active = false;
+  cancelSwap();
   stopMotion();
+  speedLeave();
+}
+
+/** Average script time per frame while the deck is open (frame budget). */
+export function turntableFrameStats(): { frames: number; avgMs: number; worstMs: number } {
+  return frameStats();
 }
 
 function applyMode(): void {
@@ -101,9 +112,15 @@ pb.onTrackChange((t: AnyTrack | null) => {
   if (!active) return;
   noteJump();
   paintBands();
-  if ((t ? t.coverKey : '') !== shownKey) paintAlbum(t ? t.coverKey : '');
-  /* The arm follows the new position with a quick lift → move → drop —
-     unless the listener just put it there by hand. */
+  const key = t ? t.coverKey : '';
+  /* A different album (the key includes the folder, so editions differ):
+     the record swap. Rapid skips retarget the running swap. */
+  if (swapRunning() || key !== shownKey) {
+    swapTo(key, paintAlbum);
+    return;
+  }
+  /* Same album: the arm follows the new position with a quick lift → move
+     → drop — unless the listener just put it there by hand. */
   if (!seekedByHand()) armMoveTo(null, 600);
 });
 
@@ -122,10 +139,12 @@ export function turntableClick(target: Element): boolean {
     applyMode();
     return true;
   }
+  if (active && speedClick(target)) return true;
   return false;
 }
 
 export function wireTurntable(): void {
   pb.wirePlayback();
   wireArmInput();
+  wireSpeedInput();
 }

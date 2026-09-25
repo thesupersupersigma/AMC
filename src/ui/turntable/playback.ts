@@ -216,6 +216,15 @@ export function onSeeked(cb: () => void): void {
   audio.addEventListener('seeked', cb);
 }
 
+/** The file played to its end. */
+export function onEnded(cb: () => void): void {
+  audio.addEventListener('ended', cb);
+}
+
+export function isEnded(): boolean {
+  return audio.ended;
+}
+
 /** The loaded file's duration became known or changed. */
 export function onDurationKnown(cb: () => void): void {
   audio.addEventListener('durationchange', cb);

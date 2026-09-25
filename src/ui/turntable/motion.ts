@@ -39,9 +39,37 @@ let spinOverride: ((now: number) => number) | null = null;
 /** Reduced motion: the record only turns when playback jumps. */
 let staticAngle = 0;
 
+/** The record turns with the platter (plus a fixed offset) while seated;
+    lifted off for a swap it keeps the angle it had. */
+let recordOffset = 0;
+let recordFree: number | null = null;
+
+/** Per-frame callbacks (the record swap); return false when finished. */
+const frameHooks: Array<(now: number) => boolean> = [];
+export function addFrameHook(fn: (now: number) => boolean): void {
+  frameHooks.push(fn);
+  if (running && !raf) raf = requestAnimationFrame(frame);
+}
+export function frameHookCount(): number {
+  return frameHooks.length;
+}
+
+export function unseatRecord(): void {
+  if (recordFree === null) recordFree = platterAngle + recordOffset;
+}
+export function seatRecord(): void {
+  if (recordFree !== null) recordOffset = recordFree - platterAngle;
+  recordFree = null;
+}
+
 let armAngle = REST_DEG;
 let armOverride: ((now: number) => number) | null = null;
 let dragging = false;
+/** The record swap owns the arm while it runs. */
+let armLocked = false;
+export function lockArm(on: boolean): void {
+  armLocked = on;
+}
 let dragAngle = 0;
 let recentSeekAt = 0;
 
@@ -148,9 +176,13 @@ function frame(now: number): void {
   else if (armOverride) armAngle = armOverride(now);
   else armAngle = liveArmAngle();
 
-  const pt = 'rotate(' + (platterAngle % 360).toFixed(2) + 'deg)';
-  if (elPlatter) elPlatter.style.transform = pt;
-  if (elSpin) elSpin.style.transform = pt;
+  for (let i = 0; i < frameHooks.length; i++) {
+    if (!frameHooks[i](now)) frameHooks.splice(i--, 1);
+  }
+
+  const recAngle = recordFree !== null ? recordFree : platterAngle + recordOffset;
+  if (elPlatter) elPlatter.style.transform = 'rotate(' + (platterAngle % 360).toFixed(2) + 'deg)';
+  if (elSpin) elSpin.style.transform = 'rotate(' + (recAngle % 360).toFixed(2) + 'deg)';
   if (elArm) elArm.style.transform = 'rotate(' + armAngle.toFixed(3) + 'deg)';
   if (elView) elView.classList.toggle('tt-playing', !pb.isPaused());
 
@@ -181,9 +213,22 @@ export function stopMotion(): void {
   if (raf) cancelAnimationFrame(raf);
   raf = 0;
   dragging = false;
-  spinOverride = null;
+  if (spinOverride) overrideSpin(null);
   armOverride = null;
+  frameHooks.length = 0;
+  armLocked = false;
+  seatRecord();
   setLifted(false);
+}
+
+/** The platter's current angular velocity, in degrees per second. */
+export function platterVelocity(): number {
+  if (spinOverride || reducedMotion() || pb.isPaused()) return 0;
+  return DEG_PER_SEC * pb.getRate();
+}
+
+export function isDragging(): boolean {
+  return dragging;
 }
 
 /** Playback jumped (seek, a new track): the reduced-motion record takes
@@ -285,7 +330,7 @@ export function wireArmInput(): void {
   if (!view) return;
   view.addEventListener('pointerdown', (e) => {
     const head = (e.target as Element).closest('#ttHead') as HTMLElement | null;
-    if (!head || !running || !pb.currentTrack()) return;
+    if (!head || !running || armLocked || !pb.currentTrack()) return;
     e.preventDefault();
     pointerId = e.pointerId;
     try {
@@ -332,7 +377,7 @@ export function wireArmInput(): void {
   window.addEventListener(
     'keydown',
     (e) => {
-      if (!running || !(e.target instanceof Element) || !e.target.closest('#ttHead')) return;
+      if (!running || armLocked || !(e.target instanceof Element) || !e.target.closest('#ttHead')) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       let handled = true;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') seekBy(-5);
