@@ -130,6 +130,12 @@ TypeScript and Vite. No framework, no UI library, no runtime dependencies. Every
 parser — FLAC, MP4, ID3, CUE, LRC — is hand-written and reads only file headers,
 never whole files.
 
+## Third-party
+
+- **FFmpeg** (libavcodec: the ALAC, AC-3 and E-AC-3 decoders only), LGPL-2.1-or-later, compiled
+  to WebAssembly for software decoding of formats the browser can't play. Build script, pinned
+  versions, configure line and license text: [`vendor/decoder/`](vendor/decoder/README.md).
+
 ---
 
 AMC is not affiliated with, endorsed by, or connected to Apple Inc.

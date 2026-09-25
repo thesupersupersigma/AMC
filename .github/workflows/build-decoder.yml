@@ -1,0 +1,65 @@
+# Builds vendor/decoder/decoder.wasm (FFmpeg libavcodec: ALAC, AC-3, E-AC-3
+# only; LGPL-2.1) with a pinned emsdk, runs the decoder and demux tests
+# against ffmpeg-made fixtures, uploads the result, and (by default) commits
+# it back to the branch the workflow ran on — replacing the silent stub.
+#
+# Run it from the Actions tab: "build-decoder" → Run workflow → pick the
+# branch (feat/decode-engine). It never creates tags.
+
+name: build-decoder
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit the built decoder.wasm back to the selected branch'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install ffmpeg (fixtures and reference PCM only)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Build decoder.wasm (pinned emsdk + FFmpeg)
+        run: bash vendor/decoder/build.sh
+
+      - name: Make fixtures
+        run: bash scripts/make-fixtures.sh
+
+      - name: Decoder and demux tests
+        run: node --test --experimental-strip-types test/*.test.mjs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amc-decoder
+          path: |
+            vendor/decoder/decoder.wasm
+            vendor/decoder/BUILDINFO.txt
+            vendor/decoder/LICENSE.LGPL-2.1
+
+      - name: Commit decoder.wasm
+        if: ${{ inputs.commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vendor/decoder/decoder.wasm vendor/decoder/BUILDINFO.txt vendor/decoder/LICENSE.LGPL-2.1
+          if git diff --cached --quiet; then
+            echo "decoder.wasm unchanged"
+          else
+            git commit -m "Decoder: FFmpeg build from the build-decoder workflow"
+            git push
+          fi

@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:file": "vite build --mode singlefile",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:engine": "node --test --experimental-strip-types test/*.test.mjs"
   },
   "devDependencies": {
     "@vercel/node": "^5.1.14",
