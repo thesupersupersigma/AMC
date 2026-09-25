@@ -7,16 +7,42 @@
      node test/helpers/make-library.mjs <outDir> */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { ascii, alacAtom, box, buildMp4, concat, dec3Box, eac3Frame, u32 } from './mp4build.mjs';
 import { alacPackets } from './alac.mjs';
 import { flacFrame, sinePcm } from './flac.mjs';
 
-function ilstTags({ title, artist, album, track }) {
+function ilstTags({ title, artist, album, track, cover }) {
   const text = (type, v) => box(type, box('data', u32(1), u32(0), new TextEncoder().encode(v)));
   const items = [text('©nam', title), text('©ART', artist), text('©alb', album), text('aART', artist)];
   if (track) items.push(box('trkn', box('data', u32(0), u32(0), Uint8Array.of(0, 0, 0, track, 0, 0, 0, 0))));
+  if (cover) items.push(box('covr', box('data', u32(14), u32(0), cover)));
   return items;
+}
+
+/* A solid-colour PNG, for cover art (ambient theming, Media Session art). */
+const CRC_TABLE = new Uint32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(b) {
+  let c = 0xffffffff;
+  for (const x of b) c = CRC_TABLE[(c ^ x) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+export function solidPng(w, h, [r, g, b]) {
+  const chunk = (type, data) => {
+    const td = concat([ascii(type), data]);
+    return concat([u32(data.length), td, u32(crc32(td))]);
+  };
+  const raw = new Uint8Array((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) raw.set([r, g, b], y * (w * 3 + 1) + 1 + x * 3);
+  }
+  const ihdr = concat([u32(w), u32(h), Uint8Array.of(8, 2, 0, 0, 0)]);
+  return concat([Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a), chunk('IHDR', ihdr), chunk('IDAT', new Uint8Array(deflateSync(raw))), chunk('IEND', new Uint8Array(0))]);
 }
 
 /** buildMp4 + an ilst with tags (udta/meta/ilst). */
@@ -88,7 +114,19 @@ function nativeFlac(seconds, tags, freq = 330) {
   return concat([ascii('fLaC'), hdr(false, 0, 34), si, hdr(true, 4, vc.length), vc, ...frames]);
 }
 
-export function makeLibrary(out) {
+/** An 11-minute mono ALAC (one verbatim packet repeated) — long enough for
+    per-track resume, which only applies past 10 minutes. */
+export function makeLongAlac() {
+  const pcm = sinePcm(4096, 1, { rate: 44100, freq: 441, amp: 0.2 });
+  const packet = alacPackets(pcm, 16, 4096).packets[0];
+  const count = Math.ceil((11 * 60 * 44100) / 4096);
+  return buildMp4(
+    [{ handler: 'soun', codec: 'alac', timescale: 44100, sampleRate: 44100, channels: 1, sampleSize: 16, config: alacAtom({ channels: 1 }), samples: new Array(count).fill(packet), durations: new Array(count).fill(4096), samplesPerChunk: 32 }],
+    { moovAtEnd: true }
+  ).bytes;
+}
+
+export function makeLibrary(out, { long = false } = {}) {
   const write = (rel, bytes) => {
     const full = join(out, rel);
     mkdirSync(join(full, '..'), { recursive: true });
@@ -100,9 +138,21 @@ export function makeLibrary(out) {
   /* ALAC album: tracks 1+2 are cut from one continuous tone (gapless pair) */
   const rate = 44100;
   const tone = (secs, offset) => sinePcm(Math.round(secs * rate), 2, { rate, freq: 441, amp: 0.4, offset });
-  write('Lossless Artist/ALAC Album/01 Alpha.m4a', taggedMp4(alacTrackFrom(tone(6, 0)), { title: 'Alpha', artist: 'Lossless Artist', album: 'ALAC Album', track: 1 }));
+  const cover = solidPng(64, 64, [200, 40, 60]);
+  write('Lossless Artist/ALAC Album/01 Alpha.m4a', taggedMp4(alacTrackFrom(tone(6, 0)), { title: 'Alpha', artist: 'Lossless Artist', album: 'ALAC Album', track: 1, cover }));
   write('Lossless Artist/ALAC Album/02 Beta.m4a', taggedMp4(alacTrackFrom(tone(6, 6 * rate)), { title: 'Beta', artist: 'Lossless Artist', album: 'ALAC Album', track: 2 }));
   write('Lossless Artist/ALAC Album/03 Gamma.m4a', taggedMp4(alacTrackFrom(tone(5, 0)), { title: 'Gamma', artist: 'Lossless Artist', album: 'ALAC Album', track: 3 }));
+  /* Synced lyrics beside Beta. */
+  write('Lossless Artist/ALAC Album/02 Beta.lrc', new TextEncoder().encode('[ti:Beta]\n[00:00.50]First line\n[00:02.00]Second line\n[00:04.00]Third line\n'));
+  /* A 12-second ALAC "vinyl side" carved by a sibling cue into two tracks
+     that meet at 6.000 s — contiguous, so playback crosses gaplessly. */
+  write('Vinyl Artist/Vinyl Rip/Side A.m4a', taggedMp4(alacTrackFrom(tone(12, 0)), { title: 'Side A', artist: 'Vinyl Artist', album: 'Vinyl Rip' }));
+  write(
+    'Vinyl Artist/Vinyl Rip/Side A.cue',
+    new TextEncoder().encode(
+      'PERFORMER "Vinyl Artist"\nTITLE "Vinyl Rip"\nFILE "Side A.m4a" WAVE\n  TRACK 01 AUDIO\n    TITLE "Groove One"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE "Groove Two"\n    INDEX 01 00:06:00\n'
+    )
+  );
   /* E-AC-3 JOC (Atmos edition) */
   const n = Math.ceil((10 * 48000) / 1536);
   const frames = Array.from({ length: n }, () => eac3Frame());
@@ -113,6 +163,15 @@ export function makeLibrary(out) {
       { title: 'Get Up', artist: 'Dolby Artist', album: 'Atmos Album', track: 1 }
     )
   );
+  if (long) write('Long Artist/Long Album/01 Long Side.m4a', makeLongAlac());
+  /* An ALAC file whose sample tables are damaged (the stts fourcc is
+     overwritten): the library still lists it, the engine must fail it
+     cleanly — logged, skipped, never a hang. */
+  const broken = taggedMp4(alacTrackFrom(tone(3, 0)), { title: 'Broken', artist: 'Broken Artist', album: 'Broken Album', track: 1 });
+  for (let i = 0; i + 4 <= broken.length; i++) {
+    if (broken[i] === 0x73 && broken[i + 1] === 0x74 && broken[i + 2] === 0x74 && broken[i + 3] === 0x73) broken.set([0x78, 0x78, 0x78, 0x78], i);
+  }
+  write('Broken Artist/Broken Album/01 Broken.m4a', broken);
   /* Fake AAC: an mp4a entry this Chromium has no decoder for, and the
      engine does not handle — today's skip behaviour must hold. */
   const junk = Array.from({ length: 40 }, () => new Uint8Array(300).fill(0x21));
@@ -131,6 +190,6 @@ if (process.argv[1] && process.argv[1].endsWith('make-library.mjs')) {
     console.error('usage: node test/helpers/make-library.mjs <outDir>');
     process.exit(2);
   }
-  makeLibrary(out);
+  makeLibrary(out, { long: process.argv.includes('--long') });
   console.log('wrote a synthetic library to', out);
 }

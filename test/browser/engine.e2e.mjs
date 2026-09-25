@@ -313,6 +313,67 @@ test('gapless ALAC through the WASM path: the segment switch is on time', async 
   assert.ok(r.ct > 0.2 && r.ct < 1.2, 'clock restarted in part two: ' + r.ct);
 });
 
+test('gapless ALAC fixture pair: sample-exact splice (real decoder only)', async () => {
+  const r = await page.evaluate(async () => {
+    const e = H.newEngine({ allowWebCodecs: false });
+    H.events.length = 0;
+    const rate = 44100;
+    const a = H.alacSineFile('gapless-1.m4a', { seconds: 3, offset: 0 });
+    const b = H.alacSineFile('gapless-2.m4a', { seconds: 3, offset: 3 * rate });
+    H.load(a, 'alac', 1.5);
+    e.setNext({ file: b, codec: 'alac', name: 'gapless-2.m4a' });
+    H.startTap();
+    await e.play();
+    await new Promise((res) => setTimeout(res, 2600));
+    H.stopTap();
+    const stub = e.trackInfo.isStub;
+    const amp = 0.5 * 32767;
+    const first = H.captured.find((x) => x.planes[0].length);
+    const base = first.media - first.stream;
+    let worst = 0;
+    let crossed = false;
+    for (const blk of H.captured.slice(1)) {
+      for (let i = 0; i < blk.planes[0].length; i++) {
+        const g = blk.stream + base + i;
+        if (g >= 3 * rate) crossed = true;
+        for (let c = 0; c < 2; c++) {
+          const want = Math.round(amp * Math.sin((2 * Math.PI * 441 * g) / rate + c * 0.5)) / 32768;
+          worst = Math.max(worst, Math.abs(blk.planes[c][i] - want));
+        }
+      }
+    }
+    return { stub, worst, crossed, events: H.events.map((x) => x.type) };
+  });
+  assert.ok(r.crossed, 'crossed the boundary');
+  assert.ok(r.events.includes('segment') && !r.events.includes('waiting') && !r.events.includes('ended'), r.events.join(','));
+  if (r.stub) {
+    console.log('# ALAC decoder is the silent stub: splice timing verified, sample values not checked');
+    return;
+  }
+  assert.ok(r.worst < 1e-6, 'worst deviation across the ALAC splice ' + r.worst);
+});
+
+test('ALAC waveform peaks through the WASM decoder (real decoder only)', async () => {
+  const r = await page.evaluate(async () => {
+    const f = H.alacSineFile('peaks-alac.m4a', { seconds: 8 });
+    const data = await H.generateEnginePeaks({ file: f, codec: 'alac', name: f.name }, 1500, undefined, { allowWebCodecs: false });
+    if (!data) return null;
+    let mn = 1;
+    let mx = -1;
+    for (let i = 0; i < data.pairs.length; i += 2) {
+      mn = Math.min(mn, data.pairs[i]);
+      mx = Math.max(mx, data.pairs[i + 1]);
+    }
+    return { mn, mx, len: data.pairs.length };
+  });
+  if (r === null) {
+    console.log('# ALAC decoder is the silent stub: no peaks to measure (and none cached)');
+    return;
+  }
+  assert.equal(r.len, 3000);
+  assert.ok(r.mx > 0.45 && r.mn < -0.45, r.mn + ' .. ' + r.mx);
+});
+
 test('memory stays flat across a long file (disk-backed, with seeks)', async () => {
   /* 8 minutes of 16-bit stereo ALAC (~85 MB) written to disk, picked
      through the file input, so the File is disk-backed like a real one. */
@@ -360,6 +421,42 @@ test('memory stays flat across a long file (disk-backed, with seeks)', async () 
   assert.ok(last - first < 8 * 1048576, 'main heap grew ' + ((last - first) / 1048576).toFixed(1) + ' MB');
   assert.ok(wMax - wFirst < 8 * 1048576, 'worker memory grew ' + ((wMax - wFirst) / 1048576).toFixed(1) + ' MB');
   assert.ok(maxQueued < 4.5 * 44100, 'worklet held ' + (maxQueued / 44100).toFixed(2) + ' s');
+});
+
+test('waveform peaks: sparse decode in a worker, existing pairs format (real audio via WebCodecs)', async () => {
+  const r = await page.evaluate(async () => {
+    const f = H.flacFile('peaks.m4a', { seconds: 10 });
+    const progress = [];
+    const data = await H.generateEnginePeaks({ file: f, codec: 'fLaC', name: f.name }, 1500, (x) => progress.push(x), { devCodecs: true });
+    const stub = await H.generateEnginePeaks({ file: H.alacFile('stub.m4a', { seconds: 3 }), codec: 'alac', name: 'stub' }, 1500);
+    let mn = 1;
+    let mx = -1;
+    for (let i = 0; i < data.pairs.length; i += 2) {
+      mn = Math.min(mn, data.pairs[i]);
+      mx = Math.max(mx, data.pairs[i + 1]);
+    }
+    return { len: data.pairs.length, duration: data.duration, mn, mx, progress: progress.length, stub };
+  });
+  assert.equal(r.len, 3000);
+  assert.ok(Math.abs(r.duration - 10) < 1e-6);
+  assert.ok(r.mx > 0.45 && r.mx < 0.51 && r.mn < -0.45 && r.mn > -0.51, 'envelope ' + r.mn + ' .. ' + r.mx);
+  assert.ok(r.progress > 5, 'progress reports');
+  assert.equal(r.stub, null, 'the silent stub yields no peaks (nothing cached)');
+});
+
+test('track-break analysis streams the whole file and finds the gap', async () => {
+  const r = await page.evaluate(async () => {
+    const f = H.breakFile();
+    const a = await H.analyzeWithEngine({ file: f, codec: 'fLaC', name: f.name }, 0.05, undefined, { devCodecs: true });
+    const { silences, proposals } = H.silencesFromRms(a.rms, a.peakRms, a.win, a.sampleRate, a.duration);
+    return { duration: a.duration, windows: a.rms.length, silences, proposals, pairs: a.pairs.length };
+  });
+  assert.equal(r.pairs, 3000);
+  assert.ok(Math.abs(r.duration - 10) < 1e-6);
+  assert.equal(r.silences.length, 1, JSON.stringify(r.silences));
+  assert.ok(Math.abs(r.silences[0].start - 4) < 0.06 && Math.abs(r.silences[0].end - 6) < 0.06, JSON.stringify(r.silences));
+  assert.equal(r.proposals.length, 1);
+  assert.ok(Math.abs(r.proposals[0] - 5.85) < 0.06, 'proposal ' + r.proposals[0]);
 });
 
 test('no page errors', () => {

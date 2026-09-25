@@ -4,9 +4,10 @@
    outputs) and writes cues/<path>.cue back into the sidecar. */
 
 import type { AnyTrack, ConnectedFolder, FileTrack, PeakData, VirtualTrack } from '../types';
-import { S, refOf } from '../state';
+import { S, canSoftDecode, refOf } from '../state';
 import { media } from '../audio/media';
-import { analyzeForSplit } from '../audio/analysis';
+import { analyzeEngineForSplit, analyzeForSplit } from '../audio/analysis';
+import { generateEnginePeaks } from '../audio/soft/soft-engine';
 import { bucketPeaks, generateSparseFlacPeaks, loadPeaks, savePeaks } from '../audio/peaks';
 import { extOf } from '../parse/bytes';
 import { buildCueText } from '../parse/cue';
@@ -200,24 +201,26 @@ export async function waveformTrackChanged(): Promise<void> {
     draw();
     return;
   }
-  generatePeaks(folder, key, src.path, src.file, curDuration);
+  generatePeaks(folder, key, src.path, src.file, curDuration, c.codec);
 }
 
 /** Lazy one-time peak generation — only ever for a track that was played or
     opened, never for the library wholesale. Queued so analyses run one at a
     time, with live progress in the wave chip. Small files decode fully
     (streaming path, unchanged); multi-GB FLACs go through the sparse
-    WebCodecs sampler, which never holds the file in memory. Where neither
-    applies — an oversized non-FLAC, or a browser without WebCodecs FLAC —
-    nothing changes: no waveform, plain slider. */
-function generatePeaks(folder: ConnectedFolder, key: string, path: string, file: File | undefined, durationHint: number): void {
+    WebCodecs sampler, which never holds the file in memory. Formats only
+    the software engine decodes (ALAC, AC-3, E-AC-3) are sampled sparsely in
+    the engine's Worker the same way. Where none applies — an oversized
+    non-FLAC, or a browser without WebCodecs FLAC — nothing changes: no
+    waveform, plain slider. */
+function generatePeaks(folder: ConnectedFolder, key: string, path: string, file: File | undefined, durationHint: number, codec?: string): void {
   if (!file || generating.has(key)) return;
   generating.add(key);
   genActive++;
   genChain = genChain
-    .then(() => doGenerate(folder, key, path, file, durationHint))
+    .then(() => doGenerate(folder, key, path, file, durationHint, codec))
     .catch(() => {
-      /* undecodable here (ec-3 and friends) — the plain slider carries on */
+      /* undecodable here — the plain slider carries on */
     })
     .then(() => {
       generating.delete(key);
@@ -226,9 +229,16 @@ function generatePeaks(folder: ConnectedFolder, key: string, path: string, file:
     });
 }
 
-async function doGenerate(folder: ConnectedFolder, key: string, path: string, file: File, durationHint: number): Promise<void> {
+async function doGenerate(folder: ConnectedFolder, key: string, path: string, file: File, durationHint: number, codec?: string): Promise<void> {
   let data: PeakData | null = null;
-  if (file.size > MAX_DECODE_BYTES) {
+  if (canSoftDecode(codec)) {
+    waveChip('Analysing waveform… 0%');
+    const r = await generateEnginePeaks({ file, codec: codec as string, name: path }, 1500, (f) => {
+      waveChip('Analysing waveform… ' + Math.round(f * 100) + '%');
+    });
+    if (!r) return; /* the silent stub decoder has nothing to measure — and nothing gets cached */
+    data = { version: 1, duration: r.duration, pairs: r.pairs };
+  } else if (file.size > MAX_DECODE_BYTES) {
     if (extOf(file.name) === 'flac') {
       waveChip('Analysing waveform… 0%');
       data = await generateSparseFlacPeaks(file, 1500, (f) => {
@@ -294,7 +304,7 @@ export async function runAutoSplit(uid: string): Promise<void> {
   if (!folder) return;
   toast('Listening for track breaks in ' + t.title + '…');
   try {
-    const result = await analyzeForSplit(t.file, t.duration);
+    const result = canSoftDecode(t.codec) ? await analyzeEngineForSplit(t.file, t.codec as string) : await analyzeForSplit(t.file, t.duration);
     /* The decode is in hand — keep the waveform output too. */
     savePeaks(folder, t.path, { version: 1, duration: result.duration, pairs: result.peaks });
     const starts = [0, ...result.proposals];

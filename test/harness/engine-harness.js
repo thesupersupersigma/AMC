@@ -1,6 +1,7 @@
 /* Dev-only harness for the software decode engine. Also the driver surface
    for test/browser/engine.e2e.mjs (window.H). */
-import { SoftEngine } from '../../src/audio/soft/soft-engine.ts';
+import { SoftEngine, analyzeWithEngine, generateEnginePeaks } from '../../src/audio/soft/soft-engine.ts';
+import { silencesFromRms } from '../../src/audio/analysis.ts';
 import { buildMp4, alacAtom, dec3Box, eac3Frame } from '../helpers/mp4build.mjs';
 import { alacPackets, testPcm } from '../helpers/alac.mjs';
 import { flacTrack, sinePcm } from '../helpers/flac.mjs';
@@ -27,6 +28,14 @@ function alacFile(name, { rate = 44100, bits = 16, channels = 2, seconds = 20 } 
   const { bytes } = buildMp4([
     { handler: 'soun', codec: 'alac', timescale: rate, sampleRate: rate, channels, sampleSize: bits, config: alacAtom({ bitDepth: bits, channels, sampleRate: rate }), samples: packets, durations },
   ]);
+  return new File([bytes], name, { type: 'audio/mp4' });
+}
+/** ALAC (verbatim frames) of a continuous sine: `offset` continues a
+    previous file's phase, for the gapless splice check. */
+function alacSineFile(name, { seconds = 3, offset = 0, rate = 44100 } = {}) {
+  const pcm = sinePcm(Math.round(seconds * rate), 2, { rate, freq: 441, amp: 0.5, offset });
+  const { packets, durations } = alacPackets(pcm, 16, 4096);
+  const { bytes } = buildMp4([{ handler: 'soun', codec: 'alac', timescale: rate, sampleRate: rate, channels: 2, sampleSize: 16, config: alacAtom({ sampleRate: rate }), samples: packets, durations }]);
   return new File([bytes], name, { type: 'audio/mp4' });
 }
 function eac3File(name, seconds = 20) {
@@ -103,6 +112,7 @@ window.H = {
   },
   makers,
   alacFile,
+  alacSineFile,
   eac3File,
   flacFile,
   load,
@@ -115,5 +125,24 @@ window.H = {
     engine.setTap(null);
   },
   log,
+  generateEnginePeaks,
+  analyzeWithEngine,
+  silencesFromRms,
+  /** tone / silence / tone FLAC-in-MP4, for the break finder. */
+  breakFile() {
+    const rate = 44100;
+    const tone = sinePcm(4 * rate, 2, { rate, freq: 330, amp: 0.5 });
+    const gap = [new Int32Array(2 * rate), new Int32Array(2 * rate)];
+    const tone2 = sinePcm(4 * rate, 2, { rate, freq: 550, amp: 0.5 });
+    const pcm = [0, 1].map((c) => {
+      const out = new Int32Array(10 * rate);
+      out.set(tone[c], 0);
+      out.set(gap[c], 4 * rate);
+      out.set(tone2[c], 6 * rate);
+      return out;
+    });
+    const { bytes } = buildMp4([flacTrack(pcm, { sampleRate: rate })]);
+    return new File([bytes], 'breaks.m4a', { type: 'audio/mp4' });
+  },
 };
 log('harness ready');

@@ -62,8 +62,11 @@ class MediaFacade extends EventTarget implements MediaLike {
   private _path: MediaPath = 'native';
   private _volume = 1;
   private _muted = false;
-  /** True while this facade itself drives the keep-alive element. */
-  private kaBusy = false;
+  /** Element play/pause events this facade caused itself. Media element
+      events arrive asynchronously, so a flag set around the call would be
+      long cleared by the time they land. */
+  private kaExpect = { play: 0, pause: 0 };
+  private kaStopTimer: ReturnType<typeof setTimeout> | null = null;
   private spatialModeFn: () => SpatialOutputMode | 'auto' = () => 'auto';
 
   constructor() {
@@ -77,10 +80,18 @@ class MediaFacade extends EventTarget implements MediaLike {
        focus taken by another tab, ChromeOS media controls without a
        handler): follow it with the engine. */
     el.addEventListener('pause', () => {
-      if (this._path === 'engine' && !this.kaBusy && this.eng && !this.eng.paused) this.eng.pause();
+      if (this.kaExpect.pause > 0) {
+        this.kaExpect.pause--;
+        return;
+      }
+      if (this._path === 'engine' && this.eng && !this.eng.paused) this.eng.pause();
     });
     el.addEventListener('play', () => {
-      if (this._path === 'engine' && !this.kaBusy && this.eng && this.eng.paused) void this.eng.play().catch(() => {});
+      if (this.kaExpect.play > 0) {
+        this.kaExpect.play--;
+        return;
+      }
+      if (this._path === 'engine' && this.eng && this.eng.paused && !this.eng.ended) void this.eng.play().catch(() => {});
     });
   }
 
@@ -112,8 +123,16 @@ class MediaFacade extends EventTarget implements MediaLike {
       this.dispatchEvent(new CustomEvent('gaplessadvance', { detail: (ev as CustomEvent).detail }));
       this.publishPosition();
     });
+    /* At a natural end the player usually starts the next track at once:
+       keep the session alive across that, and let it go only if nothing
+       follows. */
     e.addEventListener('ended', () => {
-      if (this.eng === e) this.stopKeepalive();
+      if (this.eng !== e) return;
+      if (this.kaStopTimer) clearTimeout(this.kaStopTimer);
+      this.kaStopTimer = setTimeout(() => {
+        this.kaStopTimer = null;
+        if (this._path === 'engine' && this.eng && this.eng.paused) this.stopKeepalive();
+      }, 1500);
     });
     e.addEventListener('error', () => {
       if (this.eng === e) this.stopKeepalive();
@@ -130,6 +149,7 @@ class MediaFacade extends EventTarget implements MediaLike {
       this.clearPosition();
     }
     this._path = 'native';
+    this.kaExpect = { play: 0, pause: 0 };
     el.loop = false;
     el.volume = this._volume;
     el.muted = this._muted;
@@ -142,15 +162,16 @@ class MediaFacade extends EventTarget implements MediaLike {
     const wasNative = this._path === 'native';
     this._path = 'engine';
     if (wasNative) {
-      this.kaBusy = true;
       try {
-        el.pause();
+        if (!el.paused) {
+          this.kaExpect.pause++;
+          el.pause();
+        }
         el.removeAttribute('src');
         el.load();
       } catch {
         /* nothing loaded */
       }
-      this.kaBusy = false;
     }
     const e = this.engine();
     e.volume = this._volume;
@@ -268,7 +289,8 @@ class MediaFacade extends EventTarget implements MediaLike {
   /* ---------- media session plumbing for the engine path ---------- */
 
   private startKeepalive(): void {
-    this.kaBusy = true;
+    if (this.kaStopTimer) clearTimeout(this.kaStopTimer);
+    this.kaStopTimer = null;
     try {
       const url = keepaliveUrl();
       if (el.getAttribute('src') !== url) {
@@ -277,25 +299,31 @@ class MediaFacade extends EventTarget implements MediaLike {
       }
       el.volume = 1;
       el.muted = false;
+      if (!el.paused) return;
+      this.kaExpect.play++;
       const p = el.play();
       if (p && p.catch)
         p.catch(() => {
-          /* no media session this time — playback itself is unaffected */
+          /* refused before any 'play' event: no media session this time —
+             playback itself is unaffected */
+          if (el.paused && this.kaExpect.play > 0) this.kaExpect.play--;
         });
     } catch {
       /* ditto */
     }
-    this.kaBusy = false;
   }
 
   private stopKeepalive(): void {
-    this.kaBusy = true;
+    if (this.kaStopTimer) clearTimeout(this.kaStopTimer);
+    this.kaStopTimer = null;
     try {
-      if (el.getAttribute('src') === keepaliveUrl()) el.pause();
+      if (el.getAttribute('src') === keepaliveUrl() && !el.paused) {
+        this.kaExpect.pause++;
+        el.pause();
+      }
     } catch {
       /* not playing */
     }
-    this.kaBusy = false;
   }
 
   private publishPosition(): void {

@@ -141,7 +141,7 @@ test('the queue keeps engine-capable tracks and they start directly in the engin
     const D = window.__amcDebug;
     return D.S.tracks.filter((t) => t.codec === 'alac').map((t) => t.error || '');
   });
-  assert.deepEqual(row, ['', '', '']);
+  assert.ok(row.length >= 3 && row.every((e) => !e), 'no ALAC row carries an error: ' + JSON.stringify(row));
 });
 
 test('E-AC-3 (Atmos edition) plays in the engine with the right label', async () => {

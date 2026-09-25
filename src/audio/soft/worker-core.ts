@@ -19,7 +19,7 @@ import { demuxMp4, fileReader, sampleAtFrame, type Mp4Audio } from '../mp4sample
 import { loadDecoderModule, type DecoderModule } from '../../../vendor/decoder/decoder.js';
 import { WasmBackend, WebCodecsBackend, probeWebCodecs, type Backend } from './backends';
 import { getSpatialProcessorFactory, type SpatialProcessor } from '../spatial/contract';
-import type { EngineSource, FromWorker, ToWorker, ToWorklet, TrackInfo, WorkletToWorker } from './protocol';
+import type { EngineAnalysis, EngineSource, FromWorker, ToWorker, ToWorklet, TrackInfo, WorkletToWorker } from './protocol';
 import { MEDIA_ERR_DECODE, MEDIA_ERR_SRC_NOT_SUPPORTED } from './protocol';
 
 const TARGET_SEC = 2.0;
@@ -521,6 +521,91 @@ export function startDecodeWorker(scope: WorkerScope): void {
     post({ t: 'peaks', id, data: { duration: d.duration, pairs } });
   }
 
+  /* ---------- full analysis ("Find track breaks") ---------- */
+
+  async function runAnalysis(id: number, src: EngineSource, buckets: number, windowSec: number): Promise<EngineAnalysis | null> {
+    const d = await demuxMp4(fileReader(src.file), src.file.size);
+    if (!engineCodecOk(d.codec) || !d.count) throw new Error(d.codec + ' is not an engine codec');
+    let b: Backend | null = null;
+    const cfg = allowWebCodecs || d.codec === 'fLaC' ? await probeWebCodecs(d) : null;
+    if (cfg) b = new WebCodecsBackend(cfg);
+    else {
+      const mod = await getModule();
+      if (mod.isStub) return null; /* silence would "find" breaks everywhere */
+      b = WasmBackend.open(mod, d);
+    }
+    if (!b) throw new Error('no decoder for ' + d.codec);
+    const backend = b;
+    const total = d.playFrames;
+    const win = Math.max(1, Math.round(windowSec * d.sampleRate));
+    const rms = new Float32Array(Math.floor(total / win));
+    const mins = new Float32Array(buckets).fill(1);
+    const maxs = new Float32Array(buckets).fill(-1);
+    let cursor = 0; /* pre-edit frame of the next output sample */
+    let sum = 0;
+    let inWin = 0;
+    let w = 0;
+    let peakRms = 0;
+    backend.onOutput = (_p, planes, frames) => {
+      const ch = planes.length;
+      for (let i = 0; i < frames; i++) {
+        const m = cursor + i - d.startSkip;
+        if (m < 0 || m >= total) continue;
+        let s = 0;
+        for (let c = 0; c < ch; c++) s += planes[c][i];
+        s /= ch;
+        const bk = Math.min(buckets - 1, Math.floor((m * buckets) / total));
+        if (s < mins[bk]) mins[bk] = s;
+        if (s > maxs[bk]) maxs[bk] = s;
+        if (w < rms.length) {
+          sum += s * s;
+          if (++inWin === win) {
+            const v = Math.sqrt(sum / win);
+            rms[w++] = v;
+            if (v > peakRms) peakRms = v;
+            sum = 0;
+            inWin = 0;
+          }
+        }
+      }
+      cursor += frames;
+    };
+    let i = 0;
+    let lastPost = 0;
+    while (i < d.count) {
+      const start = d.offsets[i];
+      let last = i;
+      let end = start + d.sizes[i];
+      while (last + 1 < d.count && last + 1 - i < MAX_BATCH) {
+        const o = d.offsets[last + 1];
+        const z = d.sizes[last + 1];
+        if (o < start || o + z - start > READ_WINDOW) break;
+        last++;
+        if (o + z > end) end = o + z;
+      }
+      const bytes = await readBytes(src.file, start, end);
+      for (let k = i; k <= last; k++) {
+        const rel = d.offsets[k] - start;
+        if (!backend.decode(bytes.subarray(rel, rel + d.sizes[k]))) cursor += d.durations[k];
+        if (backend instanceof WebCodecsBackend && backend.pending() >= 32) await backend.waitBelow(16);
+      }
+      i = last + 1;
+      if (i - lastPost > d.count / 50) {
+        lastPost = i;
+        post({ t: 'peaksProgress', id, fraction: i / d.count });
+      }
+    }
+    await backend.drain();
+    backend.close();
+    const pairs: number[] = new Array(buckets * 2);
+    for (let k = 0; k < buckets; k++) {
+      const filled = maxs[k] >= mins[k];
+      pairs[k * 2] = filled ? mins[k] : 0;
+      pairs[k * 2 + 1] = filled ? maxs[k] : 0;
+    }
+    return { duration: d.duration, sampleRate: d.sampleRate, win, rms: rms.subarray(0, w), peakRms, pairs };
+  }
+
   /* ---------- messages ---------- */
 
   function onLevel(m: WorkletToWorker): void {
@@ -669,6 +754,14 @@ export function startDecodeWorker(scope: WorkerScope): void {
         closeSegment(nextSeg);
         cur = prev = nextSeg = null;
         pending = null;
+        return;
+      case 'analyze':
+        try {
+          const data = await runAnalysis(m.id, m.src, m.buckets, m.windowSec);
+          post({ t: 'analysis', id: m.id, data, error: data ? undefined : 'stub decoder: no real audio to analyse' }, data ? [data.rms.buffer] : []);
+        } catch (e) {
+          post({ t: 'analysis', id: m.id, data: null, error: (e as Error).message });
+        }
         return;
       case 'peaks':
         try {

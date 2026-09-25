@@ -54,7 +54,8 @@ export type ToWorker =
   | { t: 'next'; seg: number; src: EngineSource }
   | { t: 'cancelNext'; seg: number }
   | { t: 'close' }
-  | { t: 'peaks'; id: number; src: EngineSource; buckets: number };
+  | { t: 'peaks'; id: number; src: EngineSource; buckets: number }
+  | { t: 'analyze'; id: number; src: EngineSource; buckets: number; windowSec: number };
 
 /* ---------- worker → main ---------- */
 
@@ -67,7 +68,20 @@ export type FromWorker =
   | { t: 'log'; message: string; detail?: string }
   | { t: 'keyframes'; gen: number; blockStartFrame: number; keyframes: SpatialKeyframe[] }
   | { t: 'peaks'; id: number; data: { duration: number; pairs: number[] } | null; error?: string }
-  | { t: 'peaksProgress'; id: number; fraction: number };
+  | { t: 'peaksProgress'; id: number; fraction: number }
+  | { t: 'analysis'; id: number; data: EngineAnalysis | null; error?: string };
+
+/** A full streaming decode of one file, reduced on the fly: windowed RMS of
+    the channel mix (for silence detection) and min/max peaks. */
+export interface EngineAnalysis {
+  duration: number;
+  sampleRate: number;
+  /** Frames per RMS window. */
+  win: number;
+  rms: Float32Array;
+  peakRms: number;
+  pairs: number[];
+}
 
 /* ---------- worker → worklet (MessagePort) ---------- */
 

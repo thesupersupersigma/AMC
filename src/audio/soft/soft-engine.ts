@@ -18,7 +18,7 @@ import '../spatial/register';
 import { getSpatialRendererFactory, type SpatialOutputMode, type SpatialRenderer } from '../spatial/contract';
 import { createDecodeWorker, decoderWasmUrl } from './assets';
 import { WORKLET_PROCESSOR, workletSource } from './worklet';
-import type { EngineSource, FromWorker, FromWorklet, MainToWorklet, ToWorker, TrackInfo } from './protocol';
+import type { EngineAnalysis, EngineSource, FromWorker, FromWorklet, MainToWorklet, ToWorker, TrackInfo } from './protocol';
 
 export interface EngineError {
   code: number;
@@ -775,19 +775,16 @@ export class SoftEngine extends EventTarget {
   }
 }
 
-/* ---------- waveform peaks, on a short-lived worker ---------- */
+/* ---------- one-off jobs on a short-lived worker ---------- */
 
-let peaksSeq = 0;
+let jobSeq = 0;
 
-/** Sparse-decodes packets across the file in a Worker and returns the
-    existing peaks format's pairs, or null when this file can't be measured
-    (the silent stub, an unsupported codec). */
-export function generateEnginePeaks(
-  src: EngineSource,
-  buckets: number,
-  onProgress?: (fraction: number) => void,
-  opts?: { allowWebCodecs?: boolean; devCodecs?: boolean }
-): Promise<{ duration: number; pairs: number[] } | null> {
+interface JobOpts {
+  allowWebCodecs?: boolean;
+  devCodecs?: boolean;
+}
+
+function runJob<T>(make: (id: number) => ToWorker, pick: (m: FromWorker, id: number) => { done: boolean; value?: T; error?: string } | null, onProgress?: (fraction: number) => void, opts?: JobOpts): Promise<T> {
   return new Promise((resolve, reject) => {
     let w: Worker;
     try {
@@ -796,8 +793,8 @@ export function generateEnginePeaks(
       reject(e);
       return;
     }
-    const id = ++peaksSeq;
-    const done = (fn: () => void): void => {
+    const id = ++jobSeq;
+    const finish = (fn: () => void): void => {
       try {
         w.terminate();
       } catch {
@@ -809,11 +806,12 @@ export function generateEnginePeaks(
       const m = e.data as FromWorker;
       if (m.t === 'peaksProgress' && m.id === id) {
         if (onProgress) onProgress(m.fraction);
-      } else if (m.t === 'peaks' && m.id === id) {
-        done(() => resolve(m.data));
+        return;
       }
+      const r = pick(m, id);
+      if (r && r.done) finish(() => (r.error !== undefined && r.value === undefined ? reject(new Error(r.error)) : resolve(r.value as T)));
     };
-    w.onerror = (e: ErrorEvent) => done(() => reject(new Error(e.message || 'peaks worker failed')));
+    w.onerror = (e: ErrorEvent) => finish(() => reject(new Error(e.message || 'engine worker failed')));
     const init: ToWorker = {
       t: 'init',
       wasm: decoderWasmUrl(),
@@ -822,7 +820,34 @@ export function generateEnginePeaks(
       devCodecs: !!(opts && opts.devCodecs),
     };
     w.postMessage(init);
-    const job: ToWorker = { t: 'peaks', id, src, buckets };
-    w.postMessage(job);
+    w.postMessage(make(id));
   });
+}
+
+/** Sparse-decodes packets across the file in a Worker and returns the
+    existing peaks format's pairs, or null when this file can't be measured
+    (the silent stub). */
+export function generateEnginePeaks(
+  src: EngineSource,
+  buckets: number,
+  onProgress?: (fraction: number) => void,
+  opts?: JobOpts
+): Promise<{ duration: number; pairs: number[] } | null> {
+  return runJob(
+    (id) => ({ t: 'peaks', id, src, buckets }),
+    (m, id) => (m.t === 'peaks' && m.id === id ? { done: true, value: m.data } : null),
+    onProgress,
+    opts
+  );
+}
+
+/** A full streaming decode in a Worker, reduced to windowed RMS and peaks —
+    the engine's side of "Find track breaks". Null from the silent stub. */
+export function analyzeWithEngine(src: EngineSource, windowSec: number, onProgress?: (fraction: number) => void, opts?: JobOpts): Promise<EngineAnalysis | null> {
+  return runJob(
+    (id) => ({ t: 'analyze', id, src, buckets: 1500, windowSec }),
+    (m, id) => (m.t === 'analysis' && m.id === id ? { done: true, value: m.data } : null),
+    onProgress,
+    opts
+  );
 }
