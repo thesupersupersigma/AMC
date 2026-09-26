@@ -248,6 +248,14 @@ are walked.
 
 ## 7. Contract notes for the merge step (contract not edited)
 
+> **Reconciled in v2.3.0.** The merge changed the contract on both sides: `SpatialProcessor`
+> declares `bedLayout` (here `['LFE']`) and the renderer factory receives it as
+> `(ctx, bedLayout, objectChannels)`; the `keyframes` comment now describes time-ordered
+> keyframes with `positions[i]` for object channel *i*; `stats.objects` is part of the contract and
+> feeds the "Dolby Atmos · n objects" label; `SpatialRenderer.setRate()` keeps automation on the
+> audio at playback rates other than 1. The engine decodes the core with `drc_scale 0`. The notes
+> below are as written before the merge.
+
 - `SpatialRendererFactory` gets channel counts but not `bedLayout`. This
   add-on therefore always emits a bed of `['LFE']` (1 channel) or nothing, and
   the renderer assumes `bedChannels === 1` means LFE (and 6 = 5.1(side), 8 =

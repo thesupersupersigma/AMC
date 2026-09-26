@@ -1,5 +1,12 @@
 # Merge notes: `feat/turntable-art` with `feat/decode-engine` / `feat/atmos`
 
+> **Done in v2.3.0 (`release/2.3.0`).** `playback.ts` wraps the `media` facade (§1); the
+> engine resamples in its AudioWorklet with a cubic, currentTime in source time, the refill marks
+> scaled by the rate and Atmos keyframes kept in sync through the renderer's `setRate` (§2); the
+> `player.ts` edits landed as §4 describes; the crossfade tail keeps the rate (§5). The stop/start
+> effect now shadows the facade's `pause()` / `play()`, which is also what the Media Session
+> handlers call. The rest of this file is the brief as written before the merge.
+
 This branch adds high-res artwork (`src/art/**`) and the turntable Now
 Playing mode (`src/ui/turntable/**`, `src/css/turntable.css`). It never
 touches `src/audio/**`. This file covers what the merge step has to do.

@@ -1,8 +1,9 @@
 # The software decode engine
 
 Plays what the browser can't: **ALAC** (`alac`), **AC-3** (`ac-3`) and **E-AC-3** (`ec-3`,
-including Dolby Atmos editions, whose 5.1 bed is played) in MP4/M4A. Everything the browser can
-decode still plays on the `<audio>` element, exactly as before.
+including Dolby Atmos editions, whose objects the Atmos add-on in `src/audio/atmos/` decodes and
+renders) in MP4/M4A. Everything the browser can decode still plays on the `<audio>` element,
+exactly as before. (E-)AC-3 is decoded with dynamic range compression off (`drc_scale 0`).
 
 ## How a track reaches it
 
@@ -59,20 +60,37 @@ breaks* (a streaming full decode in the Worker). The browser tests below walk th
 Chromium refuses Blob-URL worklet modules and module workers on an opaque `file://` origin.
 Classic Blob-URL workers and `data:` URL worklet modules both load. So the engine uses the Worker
 inlined by Vite (`?worker&inline`: classic, Blob URL, `data:` fallback), the worklet from a Blob
-URL with a `data:` URL fallback, and `decoder.wasm` as an inlined `data:` URL. Verified in
-Chromium from a `file://` page built to the same shape as `build:file`: native FLAC, ALAC and
-E-AC-3 all played. Confirm once with the real `npm run build:file`; the session that wrote this
-couldn't install Vite.
+URL with a `data:` URL fallback, and `decoder.wasm` as an inlined `data:` URL. Verified with the
+real `npm run build:file` opened from `file://` in Chromium (v2.3.0,
+`test/browser/release-file.e2e.mjs`): native FLAC, ALAC through the engine, Atmos objects, and
+the turntable speed on both paths.
 
-## Spatial hook (for `feat/atmos`)
+## Spatial hook (Atmos)
 
 For `ec-3` streams, a `SpatialProcessor` registered in the Worker realm gets every decoded packet
 plus its core PCM. The Worklet is sized to `maxChannels`, the returned block is played, keyframes
 are relayed stamped with the block's absolute stream frame, and `reset()` runs on seek and track
-change. On the main thread a registered `SpatialRenderer` sits between the Worklet node and the
-gain node, fed `setPlayedFrame` and `pushKeyframes`. Settings → *Spatial audio output* (Auto /
-Headphones / Speakers / Multichannel) appears once a renderer is registered.
-`test/spatial/test-processor.ts` (test-only, never in the app build) proves all of it.
+change. The processor declares its `bedLayout` up front (Atmos: `['LFE']`, everything else an
+object), and the renderer factory is handed it; its `stats.objects` is relayed for the
+"Dolby Atmos · n objects" label. On the main thread a registered `SpatialRenderer` sits between
+the Worklet node and the gain node, fed `setPlayedFrame`, `pushKeyframes` and `setRate`.
+Settings → *Spatial audio output* (Auto / Headphones / Speakers / Multichannel) appears once a
+renderer is registered, which since 2.3.0 is always: `src/audio/spatial/register.ts` registers the
+Atmos add-on. `test/spatial/test-processor.ts` (test-only, never in the app build) still proves
+the hook on its own.
+
+## Playback rate (the turntable speed)
+
+`media.playbackRate` works on both paths, varispeed like vinyl: the pitch follows the speed. On
+the engine path the AudioWorklet resamples: its read head advances `rate` source frames per output
+frame, the output is a 4-point Catmull-Rom cubic across chunk boundaries, and a rate change ramps
+linearly over one render quantum (the brake's 16 ms steps never click). At exactly 1× samples
+are copied untouched, as before; coming back to 1× it crossfades onto the exact samples within
+one quantum. Everything reported stays in source frames: `currentTime` is source time (it runs
+`rate` times faster than the clock), the Worker's buffer marks scale with the rate, and spatial
+keyframes keep their source-frame stamps while the renderer maps them through `setRate`. Like an
+element's `load()`, opening a track starts it at `defaultPlaybackRate`; a crossfade tail keeps
+the rate.
 
 ## Tests
 
@@ -85,6 +103,11 @@ AMC_URL=http://localhost:5173 npm run test:browser
 #   test/browser/engine.e2e.mjs  engine alone via test/harness/engine.html (dev-only page)
 #   test/browser/app.e2e.mjs     facade, handoff, queue, settings (synthetic library)
 #   test/browser/parity.e2e.mjs  the parity checklist on engine tracks
+#   test/browser/release.e2e.mjs       v2.3.0 release checks: native, ALAC, E-AC-3, Atmos modes,
+#                                      turntable rate/pitch on both paths, covers, memory over a
+#                                      full play (needs ffmpeg; Atmos needs test/private/;
+#                                      AMC_FULL_PLAY=0 skips the ~5 min full play)
+#   test/browser/release-file.e2e.mjs the single-file build from file:// (npm run build:file first)
 ```
 
 Browser tests push real audio through the whole engine with FLAC-in-MP4, which WebCodecs
