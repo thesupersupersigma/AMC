@@ -45,7 +45,9 @@ export function createTrackURL(file: File): string {
    Contiguous cue advances never come here — that path is gapless.
    A software-decoded track's tail is its own engine stream: the facade
    detaches the playing engine instance to fade out, and a fresh one takes
-   the next track. ---------- */
+   the next track. Either way the tail keeps the playback rate (the
+   turntable speed) and its pitch: an engine tail is the same stream, an
+   element tail is given the same rate. ---------- */
 
 let tailEl: HTMLAudioElement | null = null;
 let tailUrl = '';
@@ -79,14 +81,24 @@ function disposeTail(): void {
     silence. Fire-and-forget; a new call kills the old element tail. */
 export function startCrossfadeTail(file: File, atSec: number, fromVolume: number, seconds: number): void {
   disposeTail();
+  const rate = media.playbackRate || 1;
+  const keepPitch = media.preservesPitch;
   if (media.detachEngineTail(seconds)) return;
   try {
     tailUrl = URL.createObjectURL(file);
-    const el = new Audio();
+    const el = new Audio() as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean };
     tailEl = el;
     el.preload = 'auto';
     el.src = tailUrl;
     el.volume = Math.max(0, Math.min(1, fromVolume));
+    try {
+      el.preservesPitch = keepPitch;
+      el.webkitPreservesPitch = keepPitch;
+      el.defaultPlaybackRate = rate;
+      el.playbackRate = rate;
+    } catch {
+      /* out of this browser's range: the tail plays at 1× */
+    }
     el.currentTime = atSec;
     void el.play().catch(() => {
       disposeTail();

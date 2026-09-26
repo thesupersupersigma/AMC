@@ -336,8 +336,11 @@ function checkCrossfadeAdvance(c: AnyTrack): void {
   if (xfFiredFor === c.uid) return;
   const end = c.kind === 'virtual' ? c.endSec : c.duration || media.duration || 0;
   if (!(end > 0)) return;
+  /* In source seconds: at a playback rate r the fade's wall-clock seconds
+     cover r times as much of the track. */
+  const rate = media.playbackRate || 1;
   const remain = end - media.currentTime;
-  if (remain > S.crossfadeSec || remain <= 0.08) return;
+  if (remain > S.crossfadeSec * rate || remain <= 0.08 * rate) return;
   const ni = S.qi + 1;
   const nxt = ni < S.queue.length ? S.queue[ni] : null;
   if (!nxt) return; /* end of queue: the normal ended/repeat path decides */
