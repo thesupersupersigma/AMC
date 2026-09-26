@@ -10,6 +10,7 @@ import type { ConnectedFolder } from '../types';
 import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs, type SpatialModePref } from '../state';
 import { media } from '../audio/media';
 import { getSpatialRendererFactory } from '../audio/spatial/contract';
+import { ATMOS_CREDIT } from '../audio/atmos/labels';
 import { addFolderViaPicker, connectedFolders, folderById, pendingFolders, removeFolder, reorderFolder } from '../fs/folders';
 import { enqueueFolderScan, rescanLibrary } from '../scan/scanner';
 import { ST_COVERS, ST_TRACKS, idbClear } from '../db/idb';
@@ -73,7 +74,7 @@ export function viewSettings(): string {
   if (getSpatialRendererFactory()) {
     h += '<div class="set-row">Spatial audio output <select class="inline-input" data-set-spatial>';
     for (const [v, label] of SPATIAL_MODES) h += '<option value="' + v + '"' + (S.spatialMode === v ? ' selected' : '') + '>' + label + '</option>';
-    h += '</select><span class="set-hint">Auto picks Multichannel when the output device has 6+ channels, otherwise Speakers</span></div>';
+    h += '</select><span class="set-hint">for Dolby Atmos tracks — pick Headphones for binaural sound on headphones; Auto picks Multichannel when the output device has 6+ channels, otherwise Speakers</span></div>';
   }
   h += '<div class="set-row">Crossfade <div class="set-seg">';
   for (const x of XFADES) {
@@ -122,6 +123,9 @@ export function viewSettings(): string {
   }
 
   h += '<div class="set-sect"><p class="set-hint">AMC v' + esc(__AMC_VERSION__) + ' · Schema v' + SCHEMA_VERSION + '</p>' +
+    /* Cavern's licence asks for the creator to be named with a link; AMC
+       stays free and ad-free while src/audio/atmos/ ships (README). */
+    '<p class="set-hint" id="setAtmosCredit">' + esc(ATMOS_CREDIT.text) + ' (<a href="' + esc(ATMOS_CREDIT.creatorUrl) + '" target="_blank" rel="noopener">en.sbence.hu</a>, <a href="' + esc(ATMOS_CREDIT.sourceUrl) + '" target="_blank" rel="noopener">source</a>) — free, ad-free, and under Cavern’s licence. Dolby Atmos is a trademark of Dolby Laboratories; AMC is not affiliated with Dolby.</p>' +
     '<p class="set-hint">AMC is not affiliated with, endorsed by, or connected to Apple Inc. Apple Music is a trademark of Apple Inc.</p>' +
     '<p class="set-hint">Made by <a href="https://github.com/thesupersupersigma" target="_blank" rel="noopener">thesupersupersigma</a> and Claude Fable 5</p>' +
     '</div>';

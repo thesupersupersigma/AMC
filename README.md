@@ -33,13 +33,23 @@ durations parsed from scratch: FLAC Vorbis comments and PICTURE blocks, MP4
 `ilst` atoms, ID3v2.
 
 **Software decoding** — Apple Lossless (ALAC) and Dolby Digital / Dolby
-Digital Plus (AC-3, E-AC-3, including Atmos editions, which play their 5.1
-bed) in `.m4a`, when the browser has no decoder of its own. AMC always tries the
-browser first; on a genuine decode failure it hands the same track to its
-own engine at the same position (a Worker decoding with WebCodecs or a
-WebAssembly build of FFmpeg's decoders, playing through an AudioWorklet),
-with gapless, crossfade, waveform, lyrics and media keys all intact.
-Switchable in Settings. See [`docs/engine/`](docs/engine/ENGINE.md).
+Digital Plus (AC-3, E-AC-3) in `.m4a`, when the browser has no decoder of its
+own. AMC always tries the browser first; on a genuine decode failure it hands
+the same track to its own engine at the same position (a Worker decoding with
+WebCodecs or a WebAssembly build of FFmpeg's decoders, playing through an
+AudioWorklet), with gapless, crossfade, waveform, lyrics and media keys all
+intact. Switchable in Settings. See [`docs/engine/`](docs/engine/ENGINE.md).
+
+**Dolby Atmos** — E-AC-3 JOC tracks (Atmos `.m4a`) play their objects, not
+just the 5.1 bed: decoded in the engine's Worker and rendered binaurally for
+headphones, for stereo speakers, or to 5.1 / 7.1 / 7.1.4 outputs
+(Settings → Spatial audio output). See [`docs/atmos/`](docs/atmos/PLAN.md).
+
+**Artwork and turntable** — album headers, Now Playing, the mini player and
+the system media controls show a high-res cover (Settings → Artwork sets the
+size). Now Playing has a turntable mode: the record spins from the playback
+clock, the tonearm is the seek bar, and the speed (16–78 RPM) changes the
+pitch like vinyl — on every track, including software-decoded and Atmos ones.
 
 **Cue sheets** — vinyl rips work properly. One long FLAC plus a `.cue` becomes
 real tracks with real names, and playback crosses boundaries **gaplessly**
@@ -151,6 +161,13 @@ never whole files.
   other terms, it may not be sold and must stay ad-free. See
   [its README](src/audio/atmos/README.md). "Dolby" and "Dolby Atmos" are
   trademarks of Dolby Laboratories; AMC is not affiliated with Dolby.
+
+  **While `src/audio/atmos/` ships, AMC must stay free and ad-free**, and
+  the credit Cavern's licence requires — the creator named with a link —
+  stays in the app (Settings, at the bottom: `ATMOS_CREDIT` from
+  `src/audio/atmos/labels.ts`). Playing Atmos through AMC at a public event
+  (a screening, a listening party, a venue) needs VoidX's permission first.
+  Selling AMC, or adding ads, means removing that folder first.
 
 ---
 

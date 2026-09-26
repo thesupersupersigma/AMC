@@ -6,6 +6,8 @@ import { S, PREFS, canSoftDecode, codecLabel, engineCodecLabel, coverURL, isCode
 import { cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
 import { media } from '../audio/media';
 import type { EngineSource } from '../audio/soft/protocol';
+import type { SpatialOutputMode } from '../audio/spatial/contract';
+import { atmosActivityLine, atmosCodecLabel } from '../audio/atmos/labels';
 import { ST_META, ST_TRACKS, idbDel, idbGet, idbPut } from '../db/idb';
 import { drawWaveformProgress, waveformTrackChanged } from './waveform';
 import { lyricsTrackChanged } from './lyrics';
@@ -128,6 +130,25 @@ function announceEngine(codec: string): void {
   if (engineAnnounced.has(codec)) return;
   engineAnnounced.add(codec);
   logErr('playback', codec + " isn't supported natively here — using software decoding", engineCodecLabel(codec));
+}
+
+/* Dolby Atmos: the engine's spatial processor decodes the objects. Once per
+   session when objects first play, and again whenever the output mode they
+   are rendered for changes (Settings → Spatial audio output). */
+let atmosAnnounced: SpatialOutputMode | '' = '';
+
+function announceAtmos(): void {
+  const n = media.spatialObjects();
+  const mode = media.spatialOutputMode();
+  if (!(n > 0) || !mode || mode === atmosAnnounced) return;
+  atmosAnnounced = mode;
+  const t = S.current;
+  logErr('playback', atmosActivityLine(mode), atmosCodecLabel(n) + (t ? ' — ' + t.title : ''));
+}
+
+function onSpatialChange(): void {
+  syncFormatChip();
+  announceAtmos();
 }
 
 function loadTrack(t: AnyTrack, autoplay: boolean): void {
@@ -617,12 +638,13 @@ export function syncPlayerUI(): void {
   if (queuePanelOpen()) renderQueuePanel();
 }
 
-/** "Dolby Digital Plus (5.1 · Atmos objects not rendered) · Software
-    decode" while the engine plays the current track; '' on the native path. */
+/** "Dolby Atmos · 15 objects · Software decode", "Dolby Digital Plus
+    (5.1) · Software decode", … while the engine plays the current track;
+    '' on the native path. */
 export function currentFormatLabel(): string {
   const t = S.current;
   if (!t || media.path !== 'engine') return '';
-  return engineCodecLabel(t.codec || '', media.engineInfo()) + ' · Software decode';
+  return engineCodecLabel(t.codec || '', media.engineInfo(), media.spatialObjects()) + ' · Software decode';
 }
 
 /** The small "Software decode" chip after the title in the player pill. */
@@ -641,7 +663,7 @@ function syncFormatChip(): void {
     chip.textContent = 'Software decode';
     el.appendChild(chip);
   }
-  chip.title = engineCodecLabel(t.codec || '', media.engineInfo()) + ' — decoded in software because this browser has no decoder for it';
+  chip.title = engineCodecLabel(t.codec || '', media.engineInfo(), media.spatialObjects()) + ' — decoded in software because this browser has no decoder for it';
 }
 
 /** The scrub window: a virtual track scrubs within [startSec, endSec] of
@@ -856,6 +878,7 @@ export function wireAudio(): void {
     skipAfterFailure();
   });
   media.addEventListener('gaplessadvance', onGaplessAdvance);
+  media.addEventListener('spatialchange', onSpatialChange);
 }
 
 /* ---------- native → engine handoff ---------- */

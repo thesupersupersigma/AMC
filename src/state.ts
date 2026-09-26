@@ -6,6 +6,7 @@ import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
 import { isEngineCodec } from './audio/mp4samples';
 import { engineSupported } from './audio/soft/support';
+import { atmosCodecLabel } from './audio/atmos/labels';
 import { downscaleBlob } from './art/resize'; // hires-art hook
 import { thumbTargetPx } from './art/thumbsize'; // hires-art hook
 
@@ -292,12 +293,13 @@ function layoutName(channels: number): string {
 }
 
 /** The label for a track the software engine is playing, from what the
-    decoder actually produced. */
-export function engineCodecLabel(codec: string, info?: { coreChannels: number; joc: boolean; spatial: unknown } | null): string {
+    decoder actually produced. `objects`: what the Atmos processor reports
+    decoding (its stats.objects), once known. */
+export function engineCodecLabel(codec: string, info?: { coreChannels: number; joc: boolean; spatial: unknown } | null, objects = 0): string {
   if (codec === 'alac') return 'Apple Lossless';
   const ch = info ? layoutName(info.coreChannels) : '';
   if (codec === 'ec-3') {
-    if (info && info.joc && info.spatial) return 'Dolby Digital Plus (Atmos)';
+    if (info && info.joc && info.spatial) return objects > 0 ? atmosCodecLabel(objects) : 'Dolby Atmos';
     if (info && info.joc) return 'Dolby Digital Plus (' + ch + ' · Atmos objects not rendered)';
     return ch ? 'Dolby Digital Plus (' + ch + ')' : 'Dolby Digital Plus';
   }
