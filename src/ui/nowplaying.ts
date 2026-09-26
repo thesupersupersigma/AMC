@@ -9,8 +9,8 @@
 
 import type { AnyTrack } from '../types';
 import { FULL, S, coverURL, haveCover } from '../state';
-import { audio } from '../audio/engine';
-import { next, prev, togglePlay } from './player';
+import { media } from '../audio/media';
+import { currentFormatLabel, next, prev, togglePlay } from './player';
 import { paintWaveInto } from './waveform';
 import { toggleLyrics } from './lyrics';
 import { icon, solid } from './icons';
@@ -151,6 +151,7 @@ function markup(): string {
     '<div class="np-side">' +
     '<div class="np-title" id="npTitle"></div>' +
     '<div class="np-artist" id="npArtist"></div>' +
+    '<div class="np-format" id="npFormat"></div>' +
     '<div class="np-scrub"><canvas id="npWave"></canvas>' +
     '<input id="npScrubBar" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within the track"></div>' +
     '<div class="np-times"><span id="npElapsed">0:00</span><span id="npRemain">-0:00</span></div>' +
@@ -166,7 +167,7 @@ function markup(): string {
 
 function trackWindow(t: AnyTrack): { start: number; end: number } {
   if (t.kind === 'virtual') return { start: t.startSec, end: t.endSec || t.startSec + (t.duration || 0) };
-  return { start: 0, end: t.duration || audio.duration || 0 };
+  return { start: 0, end: t.duration || media.duration || 0 };
 }
 
 function refreshNow(): void {
@@ -185,9 +186,11 @@ function refreshNow(): void {
   const artist = document.getElementById('npArtist');
   if (title) title.textContent = t.title;
   if (artist) artist.textContent = t.artist + (t.album ? ' — ' + t.album : '');
+  const fmt = document.getElementById('npFormat');
+  if (fmt) fmt.textContent = currentFormatLabel();
   const w = trackWindow(t);
   const dur = Math.max(0.001, w.end - w.start);
-  const pos = Math.max(0, (audio.currentTime || 0) - w.start);
+  const pos = Math.max(0, (media.currentTime || 0) - w.start);
   const el = document.getElementById('npElapsed');
   const rm = document.getElementById('npRemain');
   if (el) el.textContent = fmtTime(pos);
@@ -195,7 +198,7 @@ function refreshNow(): void {
   const bar = document.getElementById('npScrubBar') as HTMLInputElement | null;
   if (bar && !scrubbing) bar.value = String(Math.round((pos / dur) * 1000));
   const play = document.getElementById('npPlay');
-  if (play) play.innerHTML = audio.paused ? solid('play') : solid('pause');
+  if (play) play.innerHTML = media.paused ? solid('play') : solid('pause');
   const cv = document.getElementById('npWave') as HTMLCanvasElement | null;
   if (cv) {
     if (!cv.width || cv.width !== Math.round(cv.clientWidth * (window.devicePixelRatio || 1))) {
@@ -315,7 +318,7 @@ export function wireNowPlaying(): void {
       const w = trackWindow(S.current);
       const frac = Number(bar.value) / 1000;
       try {
-        audio.currentTime = w.start + frac * Math.max(0, w.end - w.start);
+        media.currentTime = w.start + frac * Math.max(0, w.end - w.start);
       } catch {
         /* not seekable right now */
       }

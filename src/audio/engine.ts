@@ -1,8 +1,10 @@
-/* The audio elements and the object URL behind the current track. Playback
-   logic lives in ui/player.ts; Phase 3 grows this module (gapless cue
-   advancing needs the element to not reload between contiguous tracks). */
+/* The object URL behind the current track, and the crossfade tail. Playback
+   logic lives in ui/player.ts and goes through the facade in ./media — the
+   <audio id="audio"> element itself is only ever touched there. `probe` is
+   the separate, muted duration-probing element the scanner uses. */
 
-export const audio = document.getElementById('audio') as HTMLAudioElement;
+import { media } from './media';
+
 export const probe = document.getElementById('probe') as HTMLAudioElement;
 
 let currentURL = '';
@@ -40,7 +42,10 @@ export function createTrackURL(file: File): string {
    The outgoing tail plays on a throwaway element while the MAIN element
    (which everything else binds to — scrubber, lyrics, Media Session)
    switches to the next track and ramps up. Real overlap, no rebinding.
-   Contiguous cue advances never come here — that path is gapless. ---------- */
+   Contiguous cue advances never come here — that path is gapless.
+   A software-decoded track's tail is its own engine stream: the facade
+   detaches the playing engine instance to fade out, and a fresh one takes
+   the next track. ---------- */
 
 let tailEl: HTMLAudioElement | null = null;
 let tailUrl = '';
@@ -69,10 +74,12 @@ function disposeTail(): void {
   }
 }
 
-/** Plays the closing seconds of the outgoing track on a side element,
-    fading it to silence. Fire-and-forget; a new call kills the old tail. */
+/** Plays the closing seconds of the outgoing track on a side element (or,
+    for an engine track, on the detached engine stream), fading it to
+    silence. Fire-and-forget; a new call kills the old element tail. */
 export function startCrossfadeTail(file: File, atSec: number, fromVolume: number, seconds: number): void {
   disposeTail();
+  if (media.detachEngineTail(seconds)) return;
   try {
     tailUrl = URL.createObjectURL(file);
     const el = new Audio();
@@ -102,13 +109,13 @@ export function startCrossfadeTail(file: File, atSec: number, fromVolume: number
   }
 }
 
-/** Ramps the main element from silence up to `toVolume`. A user volume
+/** Ramps the main playback from silence up to `toVolume`. A user volume
     change (or another ramp) cancels it. */
 export function rampMainVolume(toVolume: number, seconds: number): void {
   cancelMainRamp();
   const t0 = Date.now();
   try {
-    audio.volume = 0;
+    media.volume = 0;
   } catch {
     return;
   }
@@ -116,10 +123,10 @@ export function rampMainVolume(toVolume: number, seconds: number): void {
     const f = (Date.now() - t0) / (seconds * 1000);
     try {
       if (f >= 1) {
-        audio.volume = toVolume;
+        media.volume = toVolume;
         cancelMainRamp();
       } else {
-        audio.volume = toVolume * f;
+        media.volume = toVolume * f;
       }
     } catch {
       cancelMainRamp();

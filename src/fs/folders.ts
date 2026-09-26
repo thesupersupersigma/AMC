@@ -21,6 +21,7 @@ import { render } from '../ui/render';
 import { enqueueFolderScan, reindexLibrary } from '../scan/scanner';
 import { reconcileFolderPlaylists } from '../ui/playlists';
 import { icon } from '../ui/icons';
+import { media } from '../audio/media';
 
 export interface PendingFolder {
   rec: FolderRec;
@@ -224,8 +225,7 @@ export async function removeFolder(folderId: string): Promise<void> {
   }
   if (S.current && S.current.folderId === folderId) {
     /* The playing file belongs to the removed folder — stop cleanly. */
-    const audio = document.getElementById('audio') as HTMLAudioElement | null;
-    if (audio) audio.pause();
+    media.stop();
     S.current = null;
     S.playing = false;
   }

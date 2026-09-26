@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AMC engine harness (dev only)</title>
+<style>
+  body { font: 13px system-ui, sans-serif; background: #161618; color: #eee; margin: 20px; }
+  button, select, input { font: inherit; margin: 2px; }
+  #status { white-space: pre; font: 12px ui-monospace, monospace; background: #222; padding: 10px; margin-top: 10px; }
+  #log { white-space: pre-wrap; font: 11px ui-monospace, monospace; color: #9a9aa0; max-height: 240px; overflow: auto; }
+  .row { margin: 6px 0; }
+</style>
+</head>
+<body>
+<h3>AMC software decode engine — dev harness</h3>
+<p>Not part of any build. Plays synthetic or picked <code>.m4a</code> files through the engine alone (no app).</p>
+<div class="row">
+  <button data-load="alac">Synthetic ALAC 44.1/16</button>
+  <button data-load="alac96">Synthetic ALAC 96/24</button>
+  <button data-load="eac3">Synthetic E-AC-3 5.1</button>
+  <button data-load="flac">FLAC-in-MP4 (WebCodecs, real audio)</button>
+  <input type="file" id="pick" accept=".m4a,.mp4">
+</div>
+<div class="row">
+  <button id="play">Play</button><button id="pause">Pause</button>
+  <input type="range" id="seek" min="0" max="1000" value="0" style="width:320px">
+  vol <input type="range" id="vol" min="0" max="100" value="100">
+  <label><input type="checkbox" id="mute"> mute</label>
+</div>
+<div id="status"></div>
+<div id="log"></div>
+<script type="module" src="./engine-harness.js"></script>
+</body>
+</html>

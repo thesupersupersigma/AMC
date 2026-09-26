@@ -7,7 +7,9 @@
    plain sentence saying what needs a served build and why. */
 
 import type { ConnectedFolder } from '../types';
-import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs } from '../state';
+import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs, type SpatialModePref } from '../state';
+import { media } from '../audio/media';
+import { getSpatialRendererFactory } from '../audio/spatial/contract';
 import { addFolderViaPicker, connectedFolders, folderById, pendingFolders, removeFolder, reorderFolder } from '../fs/folders';
 import { enqueueFolderScan, rescanLibrary } from '../scan/scanner';
 import { ST_COVERS, ST_TRACKS, idbClear } from '../db/idb';
@@ -17,6 +19,12 @@ import { esc, plural, toast, $ } from '../util';
 
 const ACCENTS = ['', '#fa243c', '#ff9f0a', '#30d158', '#0a84ff', '#bf5af2', '#ff375f'];
 const XFADES = [0, 3, 6, 9];
+const SPATIAL_MODES: Array<[SpatialModePref, string]> = [
+  ['auto', 'Auto'],
+  ['headphones', 'Headphones'],
+  ['speakers', 'Speakers'],
+  ['multichannel', 'Multichannel'],
+];
 
 /* ---------- the view ---------- */
 
@@ -58,7 +66,14 @@ export function viewSettings(): string {
 
   /* Playback */
   h += '<div class="set-sect"><h2>Playback</h2>';
-  h += '<label class="set-row set-check"><input type="checkbox" data-set="gapless"' + (S.gapless ? ' checked' : '') + '> Gapless cue playback <span class="set-hint">— advance between tracks of one rip without a seek or reload</span></label>';
+  h += '<label class="set-row set-check"><input type="checkbox" data-set="gapless"' + (S.gapless ? ' checked' : '') + '> Gapless cue playback <span class="set-hint">— advance between tracks of one rip without a seek or reload, and between software-decoded album tracks</span></label>';
+  h += '<label class="set-row set-check"><input type="checkbox" data-set="softdecode"' + (S.softDecode ? ' checked' : '') + '> Software decoding for unsupported formats <span class="set-hint">— Apple Lossless and Dolby Digital (Plus) play through AMC’s own decoder when this browser has none</span></label>';
+  /* Only meaningful once a spatial renderer (the Atmos add-on) is registered. */
+  if (getSpatialRendererFactory()) {
+    h += '<div class="set-row">Spatial audio output <select class="inline-input" data-set-spatial>';
+    for (const [v, label] of SPATIAL_MODES) h += '<option value="' + v + '"' + (S.spatialMode === v ? ' selected' : '') + '>' + label + '</option>';
+    h += '</select><span class="set-hint">Auto picks Multichannel when the output device has 6+ channels, otherwise Speakers</span></div>';
+  }
   h += '<div class="set-row">Crossfade <div class="set-seg">';
   for (const x of XFADES) {
     h += '<button type="button" class="seg-btn' + (S.crossfadeSec === x ? ' on' : '') + '" data-xfade="' + x + '">' + (x === 0 ? 'Off' : x + 's') + '</button>';
@@ -314,6 +329,15 @@ export function wireSettings(): void {
     if (f && folder) void importSidecarZip(folder, f);
   });
 
+  $('#view').addEventListener('change', (e) => {
+    const sel = (e.target as Element).closest('[data-set-spatial]') as HTMLSelectElement | null;
+    if (!sel) return;
+    const v = sel.value;
+    S.spatialMode = v === 'headphones' || v === 'speakers' || v === 'multichannel' ? v : 'auto';
+    savePrefs();
+    media.refreshSpatialMode();
+  });
+
   $('#view').addEventListener('click', (e) => {
     const target = e.target as Element;
     let el: Element | null;
@@ -330,6 +354,11 @@ export function wireSettings(): void {
       } else if (what === 'gapless') {
         S.gapless = (el as HTMLInputElement).checked;
         savePrefs();
+      } else if (what === 'softdecode') {
+        /* Applies from the next track on; whatever plays now keeps playing. */
+        S.softDecode = (el as HTMLInputElement).checked;
+        savePrefs();
+        rerenderIfSettings();
       } else if (what === 'persist') {
         /* A real user gesture — the one place a re-request can succeed. */
         void navigator.storage.persist().then((granted) => {

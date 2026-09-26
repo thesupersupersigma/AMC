@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "api", "vite.config.ts"]
+  "include": ["src", "api", "vite.config.ts", "test/spatial"]
 }

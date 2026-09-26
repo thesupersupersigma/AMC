@@ -6,7 +6,7 @@
 
 import type { AnyTrack } from '../types';
 import { S, coverURL } from '../state';
-import { audio } from '../audio/engine';
+import { media } from '../audio/media';
 import { next, prev, togglePlay } from './player';
 import { icon, solid } from './icons';
 import { fmtTime, $ } from '../util';
@@ -77,7 +77,7 @@ function solidBody(name: string): string {
 
 function trackWindowOf(t: AnyTrack): { start: number; end: number } {
   if (t.kind === 'virtual') return { start: t.startSec, end: t.endSec || t.startSec + (t.duration || 0) };
-  return { start: 0, end: t.duration || audio.duration || 0 };
+  return { start: 0, end: t.duration || media.duration || 0 };
 }
 
 let pipScrubbing = false;
@@ -105,12 +105,12 @@ function pipUpdate(): void {
   }
   const w = trackWindowOf(t);
   const dur = Math.max(0.001, w.end - w.start);
-  const pos = Math.max(0, (audio.currentTime || 0) - w.start);
+  const pos = Math.max(0, (media.currentTime || 0) - w.start);
   set('times', fmtTime(pos) + ' / ' + fmtTime(dur));
   const scrub = d.getElementById('scrub') as HTMLInputElement | null;
   if (scrub && !pipScrubbing) scrub.value = String(Math.round((pos / dur) * 1000));
   const play = d.getElementById('play');
-  if (play) play.innerHTML = '<svg viewBox="0 0 24 24">' + solidBody(audio.paused ? 'play' : 'pause') + '</svg>';
+  if (play) play.innerHTML = '<svg viewBox="0 0 24 24">' + solidBody(media.paused ? 'play' : 'pause') + '</svg>';
 }
 
 async function openPip(): Promise<void> {
@@ -138,7 +138,7 @@ async function openPip(): Promise<void> {
     if (!t) return;
     const w = trackWindowOf(t);
     try {
-      audio.currentTime = w.start + (Number(scrub.value) / 1000) * Math.max(0, w.end - w.start);
+      media.currentTime = w.start + (Number(scrub.value) / 1000) * Math.max(0, w.end - w.start);
     } catch {
       /* not seekable right now */
     }
