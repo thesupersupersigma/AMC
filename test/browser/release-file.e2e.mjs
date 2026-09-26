@@ -141,7 +141,7 @@ async function activityLog() {
   return text || '';
 }
 
-test('file:// single-file build: the page is really on file://', { skip: skip || (SERVED && 'served build') }, async () => {
+test('file:// single-file build: the page is really on file://', { skip: skip || (SERVED ? 'served build' : false) }, async () => {
   const r = await page.evaluate(() => ({ protocol: location.protocol, origin: String(self.origin), sw: 'serviceWorker' in navigator && !!navigator.serviceWorker.controller, fsa: 'showDirectoryPicker' in window }));
   report('page', r);
   assert.equal(r.protocol, 'file:');
