@@ -384,6 +384,9 @@ function checkCueBoundary(c: VirtualTrack): void {
     syncPlayerUI();
     updatePlayingRows();
     updateMediaSession(nxt);
+    void ensureFullArt(nxt).then(() => {
+      updateMediaSession(nxt);
+    });
     savePrefs();
     void waveformTrackChanged();
     lyricsTrackChanged();
@@ -1004,6 +1007,9 @@ export function restoreLastTrack(): boolean {
     logErr('playback', 'Could not reopen the last track', (e as Error) && (e as Error).message);
   }
   updateMediaSession(t);
+  void ensureFullArt(t).then(() => {
+    updateMediaSession(t);
+  });
   void waveformTrackChanged();
   lyricsTrackChanged();
   return true;

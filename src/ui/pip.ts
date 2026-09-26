@@ -10,7 +10,7 @@ import { media } from '../audio/media';
 import { next, prev, togglePlay } from './player';
 import { icon, solid } from './icons';
 import { fmtTime, $ } from '../util';
-import { heroURLNow } from '../art/hero'; // hires-art hook
+import { heroArt, heroCoverURL, heroURLNow } from '../art/hero'; // hires-art hook
 
 interface DocPiP {
   requestWindow(opts?: { width?: number; height?: number }): Promise<Window>;
@@ -99,6 +99,11 @@ function pipUpdate(): void {
   set('title', t.title);
   set('artist', t.artist);
   const art = d.getElementById('art') as HTMLImageElement | null;
+  /* hires-art hook: ask for the album's hero at the current quality (a
+     no-op once held; a PiP opened before anything minted it still gets
+     it, and so does a quality change), and show whatever is held — the
+     thumb until the first hero lands. */
+  if (!heroArt(t)) void heroCoverURL(t);
   const url = heroURLNow(t) || coverURL(t.coverKey); // hires-art hook
   if (art && art.getAttribute('src') !== url) {
     if (url) art.src = url;
