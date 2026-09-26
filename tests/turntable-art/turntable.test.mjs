@@ -95,6 +95,7 @@ export async function run({ server, check }) {
         await playerBar({ page, keys, check });
         await deckControls({ page, keys, check });
         await shiftSnap({ page, keys, check });
+        await cueEndIntoAnotherFile({ page, keys, check });
       }
       check(`[${width}] no uncaught page errors`, errors.length === 0, errors.slice(0, 3));
     } finally {
@@ -396,6 +397,26 @@ async function shiftSnap({ page, keys, check }) {
   check('album: Shift-drag snaps across the album’s songs and plays the chosen one from its start', alb.after.title === 'Alpha Song 3' && alb.after.t < 2 && alb.label.albumBands === 2 && /^3 · Alpha Song 3/.test(alb.label.text) && !alb.after.label, alb);
   const plain = await shiftDrag(page, 0.5, false);
   check('album without Shift: the arm seeks within the song', plain.after.title === 'Alpha Song 3' && Math.abs(plain.after.t - 20) < 2 && /^0:\d\d \/ 0:40/.test(plain.label.text), plain);
+}
+
+/* A cue track ending into ANOTHER file: the player pauses (the brake
+   starts) and loads the next file, then plays it. That must really play,
+   not leave the new file paused at 0:00 while the UI says playing. */
+async function cueEndIntoAnotherFile({ page, keys, check }) {
+  await openTurntable(page, keys, 'Delta Side A', 0);
+  const r = await page.evaluate(async (k) => {
+    const S = window.__st.S;
+    const p = await window.__mod('/src/ui/player.ts');
+    const one = S.albumMap[k['Delta Side A']].tracks[0];
+    const alpha = S.albumMap[k.Alpha].tracks[0];
+    p.playList([one, alpha], 0);
+    const a = document.getElementById('audio');
+    for (let i = 0; i < 60 && (a.paused || a.currentTime < 0.2); i++) await new Promise((res) => setTimeout(res, 50));
+    a.currentTime = one.endSec - 2.5;
+    await new Promise((res) => setTimeout(res, 6000));
+    return { brakeArmed: S.ttBrake !== false, title: S.current && S.current.title, paused: a.paused, t: a.currentTime, playing: S.playing };
+  }, keys);
+  check('a cue track ending into another file plays that file (stop/start effect armed)', r.brakeArmed && r.title === 'Alpha Song 1' && !r.paused && r.t > 1 && r.playing, r);
 }
 
 /* ---------- gate 4: spin and tonearm ---------- */

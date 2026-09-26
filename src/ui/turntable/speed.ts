@@ -195,6 +195,14 @@ const hooks: pb.TransportHooks = {
     if (braking) {
       braking = false;
       document.getElementById('npview')?.classList.remove('tt-braking');
+      /* A track was loaded while it braked (a cue track ending into
+         another file pauses, then loads the next): nothing is playing to
+         spin back up, so drop the brake and really play, at speed. */
+      if (pb.isPaused()) {
+        clearRamp();
+        pb.setRate(rateFor(rpmNow()));
+        return realPlay();
+      }
       spinUpFrom(pb.getRate());
       return Promise.resolve();
     }
