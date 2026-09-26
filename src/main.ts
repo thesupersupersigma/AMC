@@ -3,6 +3,7 @@ import './css/layout.css';
 import './css/components.css';
 import './css/views.css';
 import './css/lyrics.css';
+import './css/turntable.css'; // turntable hook (also Settings › Artwork)
 
 /* The log module installs the global error hooks on import — everything
    after this line is captured. */

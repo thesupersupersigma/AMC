@@ -1,11 +1,12 @@
 /* Album and artist detail views. */
 
 import { S, albumDuration } from '../state';
-import { icon, solid, artHTML } from './icons';
+import { icon, solid } from './icons'; // hires-art hook: header art moved to heroArtBox
 import { esc, fmtTotal, norm, plural } from '../util';
 import { emptyNote } from './render';
 import { grid, albumTile } from './albums';
 import { songTable, sortTracks } from './songs';
+import { heroArtBox } from '../art/dom'; // hires-art hook
 
 export function viewAlbum(key: string): string {
   const al = S.albumMap[key];
@@ -15,7 +16,7 @@ export function viewAlbum(key: string): string {
   const ed = al.edition ? ' <span class="ed">' + esc(al.edition) + '</span>' : '';
   let h =
     '<div class="detail">' +
-    '<div class="art">' + artHTML(al.key, 'note') + '</div>' +
+    heroArtBox(al.key, 'art', 'note') + // hires-art hook
     '<div class="meta">' +
     '<h1>' + esc(al.album) + ed + '</h1>' +
     '<button class="by" type="button" data-nav="artist:' + esc(norm(al.artist)) + '">' + esc(al.artist) + '</button>' +

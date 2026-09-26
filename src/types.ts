@@ -394,6 +394,9 @@ export interface CoverRec {
 
 export type LyricsSource = 'auto' | 'local' | 'off';
 
+/** Hero artwork size level — Settings › Artwork. */ // hires-art hook
+export type ArtQuality = 'low' | 'standard' | 'high' | 'max'; // hires-art hook
+
 export interface Prefs {
   volume?: number;
   muted?: boolean;
@@ -409,6 +412,10 @@ export interface Prefs {
   softDecode?: boolean;
   /** Spatial audio output for Atmos add-ons: auto | headphones | speakers | multichannel. */
   spatialMode?: string;
+  artQuality?: ArtQuality; // hires-art hook
+  npMode?: 'cover' | 'turntable'; // turntable hook
+  ttRpm?: number; // turntable hook
+  ttBrake?: boolean; // turntable hook
   /** Legacy (Phase 1): bare path. Still honoured on restore. */
   lastPath?: string;
   /** Folder-qualified successor of lastPath. */

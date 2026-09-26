@@ -11,6 +11,8 @@ import { queueSidecarWrite } from '../fs/amcdir';
 import { collectionIdFor } from '../fs/overrides';
 import { apiUrl, norm } from '../util';
 import { logErr } from '../ui/log';
+import { markCatalogBlob } from '../art/marks'; // hires-art hook
+import { currentQuality, levelOf } from '../art/quality'; // hires-art hook
 
 export interface CatalogMatch {
   collection: CatalogEntry;
@@ -195,28 +197,85 @@ export async function fetchCatalogFor(folder: ConnectedFolder, al: Album): Promi
   return { collection: got.collection, songs: got.songs, fromCache: false };
 }
 
-/* ---------- artwork ---------- */
+/* ---------- artwork ----------
+   hires-art hook: sized per Settings › Artwork quality, with a step-down
+   for when the proxy cannot carry the requested size. ---------- */
 
-/** artworkUrl100 → the same image at 600 px, served through the proxy. */
-export function artworkProxyUrl(artworkUrl100: string): string {
+/** artworkUrl100 → the same image at `px` (600 by default), served through
+    the proxy. */
+export function artworkProxyUrl(artworkUrl100: string, px?: number): string {
+  const size = px && px > 0 ? Math.round(px) : 600; // hires-art hook
   try {
     const u = new URL(artworkUrl100);
-    return apiUrl('/api/itunes/art' + u.pathname.replace(/100x100(bb)?(\.[a-z]+)$/i, '600x600bb$2'));
+    return apiUrl('/api/itunes/art' + u.pathname.replace(/100x100(bb)?(\.[a-z]+)$/i, size + 'x' + size + 'bb$2'));
   } catch {
     return '';
   }
 }
 
-export async function fetchArtwork(artworkUrl100: string): Promise<Blob | null> {
-  const url = artworkProxyUrl(artworkUrl100);
-  if (!url) return null;
+/* The proxy caps what one serverless response can carry (Vercel: 4.5 MB,
+   413 FUNCTION_PAYLOAD_TOO_LARGE) and answers 502 "too large" itself just
+   below that. Either means "ask for a smaller size", not "fail". */
+async function tooLarge(resp: Response): Promise<boolean> {
+  if (resp.status === 413) return true;
+  if (resp.status !== 502) return false;
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const blob = await resp.blob();
-    return blob.size && blob.type.indexOf('image/') === 0 ? blob : null;
-  } catch (e) {
-    logErr('catalog', 'The artwork download failed', (e as Error).message);
-    return null;
+    const j = (await resp.clone().json()) as { error?: string };
+    return /too large/i.test(String(j && j.error));
+  } catch {
+    return false;
   }
+}
+
+export interface SizedArtwork {
+  blob: Blob;
+  /** The size that was requested (the image may be smaller if that is all
+      the catalog has). */
+  px: number;
+}
+
+/** Tries each size in turn (largest first), stepping down only when the
+    image is too large for the proxy. `beforeRequest` paces bulk callers. */
+export async function fetchArtworkSized(artworkUrl100: string, sizes: number[], beforeRequest?: () => Promise<void>): Promise<SizedArtwork | null> {
+  for (let i = 0; i < sizes.length; i++) {
+    const url = artworkProxyUrl(artworkUrl100, sizes[i]);
+    if (!url) return null;
+    try {
+      if (beforeRequest) await beforeRequest();
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (!blob.size || blob.type.indexOf('image/') !== 0) return null;
+        markCatalogBlob(blob, sizes[i]);
+        return { blob: blob, px: sizes[i] };
+      }
+      if (i < sizes.length - 1 && (await tooLarge(resp))) {
+        logErr('catalog', 'The ' + sizes[i] + ' px cover is too large for the proxy — trying ' + sizes[i + 1] + ' px', '');
+        continue;
+      }
+      if (resp.status === 429) throw new Error('The artwork proxy is rate limiting (429) — try again in a minute');
+      return null;
+    } catch (e) {
+      logErr('catalog', 'The artwork download failed', (e as Error).message);
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function fetchArtwork(artworkUrl100: string): Promise<Blob | null> {
+  const got = await fetchArtworkSized(artworkUrl100, levelOf(currentQuality()).catalogPx); // hires-art hook
+  return got ? got.blob : null;
+}
+
+/** The catalog artworkUrl100 for a remembered collection: the sidecar
+    cache first (offline), else one rate-limited lookup. '' when unknown. */ // hires-art hook
+export async function artworkUrlFor(folder: ConnectedFolder, collectionId: number): Promise<string> {
+  if (!collectionId) return '';
+  const cached = await readCachedCatalog(folder, collectionId);
+  if (cached && cached.collection.artworkUrl100) return cached.collection.artworkUrl100;
+  const got = await lookupCollection(collectionId);
+  if (!got) return '';
+  cacheCatalog(folder, got.collection.collectionId, got);
+  return got.collection.artworkUrl100 || '';
 }

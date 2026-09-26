@@ -2,7 +2,7 @@
    restore-last-track. */
 
 import type { AnyTrack, RowTrack, TrackRec, VirtualTrack } from '../types';
-import { S, PREFS, FULL, canSoftDecode, codecLabel, engineCodecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, releaseFullArt, savePrefs } from '../state';
+import { S, PREFS, canSoftDecode, codecLabel, engineCodecLabel, coverURL, isCodecFailed, isPlayableTrack, libraryTracks, markCodecFailed, markCodecWorking, refOf, savePrefs } from '../state'; // hires-art hook: FULL / releaseFullArt folded into art/hero
 import { cancelMainRamp, createTrackURL, getLoadedSrcKey, rampMainVolume, revokeCurrentURL, setLoadedSrcKey, startCrossfadeTail } from '../audio/engine';
 import { media } from '../audio/media';
 import type { EngineSource } from '../audio/soft/protocol';
@@ -16,7 +16,7 @@ import { clamp, fmtTime, plural, toast, $ } from '../util';
 import { scheduleRender, render } from './render';
 import { renderQueuePanel, queuePanelOpen, toggleQueuePanel } from './queue';
 import { updatePlayingRows } from './songs';
-import { extractArt } from '../scan/scanner';
+import { heroArt, heroCoverURL, trimHeroes } from '../art/hero'; // hires-art hook
 
 let seeking = false;
 let failStreak = 0;
@@ -500,24 +500,13 @@ export function toggleMute(): void {
   syncVolumeUI();
 }
 
-/* Full-size art is fetched for the playing track only, then revoked on change. */
+/* Hero art (art/hero.ts, at the Artwork quality level) is minted for the
+   playing track's album; the previous album's hero is released on change.
+   Never awaited by playback. */ // hires-art hook
 function ensureFullArt(track: AnyTrack | null): Promise<string> {
-  if (!track || !track.file || !track.hasArt) {
-    releaseFullArt();
-    return Promise.resolve('');
-  }
-  if (FULL.key === track.coverKey && FULL.url) return Promise.resolve(FULL.url);
-  releaseFullArt();
-  const wanted = track.coverKey;
-  return extractArt(track.file)
-    .then((blob) => {
-      if (!blob) return '';
-      if (S.current && S.current.coverKey !== wanted) return ''; /* moved on already */
-      FULL.key = wanted;
-      FULL.url = URL.createObjectURL(blob);
-      return FULL.url;
-    })
-    .catch(() => '');
+  trimHeroes(); // hires-art hook
+  if (!track) return Promise.resolve(''); // hires-art hook
+  return heroCoverURL(track).then((url) => (S.current === track ? url : '')); // hires-art hook
 }
 
 /* ---------- Media Session: this is what drives the Chromebook media keys --- */
@@ -525,8 +514,11 @@ function updateMediaSession(t: AnyTrack | null): void {
   if (!('mediaSession' in navigator) || !t) return;
   try {
     const art: MediaImage[] = [];
-    const u = FULL.url || coverURL(t.coverKey);
-    if (u) art.push({ src: u, sizes: '300x300' });
+    /* hires-art hook: the hero with its REAL size; the thumb until then. */
+    const hero = heroArt(t);
+    const u = hero ? hero.url : coverURL(t.coverKey);
+    if (hero) art.push({ src: hero.url, sizes: hero.w + 'x' + hero.h, type: hero.blob.type || 'image/jpeg' });
+    else if (u) art.push({ src: u });
     navigator.mediaSession.metadata = new MediaMetadata({
       title: t.title,
       artist: t.artist,
