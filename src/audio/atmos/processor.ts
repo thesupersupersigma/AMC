@@ -52,7 +52,8 @@ const maxContractChannels = 32;
 /** How far the processor's output lags the core it is given, in samples
     (the QMF round trip). Keyframes already account for it. */
 export const jocLatency = qmfDelay;
-const bedLayout = ['LFE'];
+/** The bed of every block: the core LFE. Everything else is an object. */
+const lfeBed = ['LFE'];
 
 /** True when the stream's dec3 box signals JOC objects
     (flag_ec3_extension_type_a). */
@@ -64,6 +65,7 @@ export function streamCarriesObjects(info: SpatialStreamInfo): boolean {
 
 class JocProcessor implements SpatialProcessor {
   readonly maxChannels: number;
+  readonly bedLayout: readonly string[] = lfeBed;
   readonly stats: JocProcessorStats;
   private readonly parser: AccessUnitParser;
   private upmix: JocUpmix | null = null;
@@ -109,7 +111,7 @@ class JocProcessor implements SpatialProcessor {
     }
     this.stats.droppedObjectFrames = upmix.droppedObjectFrames;
     this.stats.sparseFrames = this.parser.extensions.joc.sparseFrames;
-    return { pcm, bedChannels: 1, bedLayout, keyframes };
+    return { pcm, bedChannels: 1, bedLayout: lfeBed, keyframes };
   }
 
   reset(): void {

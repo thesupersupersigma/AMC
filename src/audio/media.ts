@@ -13,7 +13,14 @@
    While the engine plays, the element loops generated silence so Chrome
    keeps the media session (media keys, ChromeOS media controls); its own
    events are swallowed then, and the Media Session position state is
-   published from the engine clock instead. */
+   published from the engine clock instead.
+
+   Playback rate (the turntable speed) works on both paths, in SOURCE time:
+   currentTime advances `playbackRate` seconds per second either way. The
+   element plays it with pitch preservation off (varispeed); the engine
+   always resamples, so its pitch always follows the speed. Like an
+   element's load(), loading a track on either path starts it at
+   defaultPlaybackRate. */
 
 import { SoftEngine, engineSupported } from './soft/soft-engine';
 import type { EngineSource, TrackInfo } from './soft/protocol';
@@ -31,9 +38,22 @@ export interface MediaLike extends EventTarget {
   readonly ended: boolean;
   volume: number;
   muted: boolean;
+  playbackRate: number;
+  defaultPlaybackRate: number;
+  preservesPitch: boolean;
   readonly error: { code: number; message?: string } | null;
   play(): Promise<void>;
   pause(): void;
+}
+
+type PitchEl = HTMLMediaElement & { preservesPitch?: boolean; mozPreservesPitch?: boolean; webkitPreservesPitch?: boolean };
+
+/* The range AMC uses (the turntable clamps to it; the engine's resampler
+   is sized for it). */
+function clampRate(v: number): number {
+  const r = Number(v);
+  if (!(r > 0) || !isFinite(r)) return 1;
+  return Math.max(0.0625, Math.min(4, r));
 }
 
 const FORWARDED = [
@@ -53,6 +73,7 @@ const FORWARDED = [
   'ended',
   'error',
   'volumechange',
+  'ratechange',
 ];
 
 const el = document.getElementById('audio') as HTMLAudioElement;
@@ -62,6 +83,8 @@ class MediaFacade extends EventTarget implements MediaLike {
   private _path: MediaPath = 'native';
   private _volume = 1;
   private _muted = false;
+  private _defaultRate = 1;
+  private _preservesPitch = true;
   /** Element play/pause events this facade caused itself. Media element
       events arrive asynchronously, so a flag set around the call would be
       long cleared by the time they land. */
@@ -110,14 +133,19 @@ class MediaFacade extends EventTarget implements MediaLike {
       spatialMode: () => this.resolvedSpatialMode(),
       devCodecs: import.meta.env.DEV,
     });
+    e.defaultPlaybackRate = this._defaultRate;
+    e.playbackRate = this._defaultRate;
     for (const type of FORWARDED) {
       e.addEventListener(type, () => {
         if (this._path === 'engine' && this.eng === e) {
           this.dispatchEvent(new Event(type));
-          if (type === 'play' || type === 'pause' || type === 'seeked' || type === 'durationchange' || type === 'playing') this.publishPosition();
+          if (type === 'play' || type === 'pause' || type === 'seeked' || type === 'durationchange' || type === 'playing' || type === 'ratechange') this.publishPosition();
         }
       });
     }
+    e.addEventListener('spatialchange', () => {
+      if (this._path === 'engine' && this.eng === e) this.dispatchEvent(new Event('spatialchange'));
+    });
     e.addEventListener('segment', (ev) => {
       if (this._path !== 'engine' || this.eng !== e) return;
       this.dispatchEvent(new CustomEvent('gaplessadvance', { detail: (ev as CustomEvent).detail }));
@@ -153,6 +181,8 @@ class MediaFacade extends EventTarget implements MediaLike {
     el.loop = false;
     el.volume = this._volume;
     el.muted = this._muted;
+    /* load() resets playbackRate to this; preservesPitch survives loads. */
+    this.applyElementRate();
     el.src = url;
     el.load();
   }
@@ -176,7 +206,8 @@ class MediaFacade extends EventTarget implements MediaLike {
     const e = this.engine();
     e.volume = this._volume;
     e.muted = this._muted;
-    e.open(src, startSec);
+    e.defaultPlaybackRate = this._defaultRate;
+    e.open(src, startSec); /* starts at the default rate, as load() would */
   }
 
   /** Stop and drop whatever is loaded (the playing folder was removed). */
@@ -266,6 +297,68 @@ class MediaFacade extends EventTarget implements MediaLike {
     else if (this.eng) this.eng.muted = this._muted;
   }
 
+  /** Source seconds per second on the active path. */
+  get playbackRate(): number {
+    if (this._path === 'engine') return this.eng ? this.eng.playbackRate : this._defaultRate;
+    return el.playbackRate;
+  }
+  set playbackRate(v: number) {
+    const r = clampRate(v);
+    if (this._path === 'engine') {
+      if (this.eng) this.eng.playbackRate = r;
+      return;
+    }
+    try {
+      el.playbackRate = r;
+    } catch {
+      /* out of this browser's range */
+    }
+  }
+  /** The rate every newly loaded track starts at, on either path. */
+  get defaultPlaybackRate(): number {
+    return this._defaultRate;
+  }
+  set defaultPlaybackRate(v: number) {
+    this._defaultRate = clampRate(v);
+    if (this.eng) this.eng.defaultPlaybackRate = this._defaultRate;
+    try {
+      el.defaultPlaybackRate = this._defaultRate;
+    } catch {
+      /* out of range */
+    }
+  }
+  /** Pitch correction at rates other than 1. The engine resamples, so on
+      that path the pitch always follows the speed (false). */
+  get preservesPitch(): boolean {
+    if (this._path === 'engine') return false;
+    return (el as PitchEl).preservesPitch !== false;
+  }
+  set preservesPitch(on: boolean) {
+    this._preservesPitch = !!on;
+    this.applyElementPitch();
+  }
+
+  private applyElementPitch(): void {
+    const p = el as PitchEl;
+    try {
+      p.preservesPitch = this._preservesPitch;
+      p.mozPreservesPitch = this._preservesPitch;
+      p.webkitPreservesPitch = this._preservesPitch;
+    } catch {
+      /* read-only in some engines */
+    }
+  }
+
+  private applyElementRate(): void {
+    try {
+      el.defaultPlaybackRate = this._defaultRate;
+      el.playbackRate = this._defaultRate;
+    } catch {
+      /* out of range */
+    }
+    this.applyElementPitch();
+  }
+
   play(): Promise<void> {
     if (this._path === 'native') return el.play();
     const e = this.engine();
@@ -331,7 +424,7 @@ class MediaFacade extends EventTarget implements MediaLike {
     const d = this.eng.duration;
     if (!(d > 0) || !isFinite(d)) return;
     try {
-      navigator.mediaSession.setPositionState({ duration: d, playbackRate: 1, position: Math.max(0, Math.min(d, this.eng.currentTime)) });
+      navigator.mediaSession.setPositionState({ duration: d, playbackRate: this.eng.playbackRate || 1, position: Math.max(0, Math.min(d, this.eng.currentTime)) });
     } catch {
       /* older API shape */
     }
@@ -352,6 +445,16 @@ class MediaFacade extends EventTarget implements MediaLike {
   }
   refreshSpatialMode(): void {
     if (this.eng) this.eng.refreshSpatialMode();
+    if (this._path === 'engine') this.dispatchEvent(new Event('spatialchange'));
+  }
+  /** Objects the Atmos processor decodes for the playing track (0 when
+      none run, or before the first object frame). */
+  spatialObjects(): number {
+    return this._path === 'engine' && this.eng ? this.eng.spatialObjects : 0;
+  }
+  /** The mode the spatial renderer renders for right now, or null. */
+  spatialOutputMode(): SpatialOutputMode | null {
+    return this._path === 'engine' && this.eng ? this.eng.spatialMode : null;
   }
   private resolvedSpatialMode(): SpatialOutputMode {
     const m = this.spatialModeFn();

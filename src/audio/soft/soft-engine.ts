@@ -12,7 +12,10 @@
 
    currentTime comes from frames the worklet actually played (its read-head
    reports), interpolated on the audio clock between reports and corrected
-   for output latency — never from the wall clock. */
+   for output latency — never from the wall clock. It is SOURCE time: at a
+   playback rate r the worklet consumes r source frames per output frame
+   (varispeed, pitch follows speed), so currentTime runs r times faster
+   than the clock, exactly like an <audio> element's. */
 
 import '../spatial/register';
 import { getSpatialRendererFactory, type SpatialOutputMode, type SpatialRenderer } from '../spatial/contract';
@@ -60,6 +63,16 @@ async function addWorkletModule(ctx: AudioContext): Promise<void> {
 }
 
 const TIMEUPDATE_MS = 250;
+/* The element's playbackRate range that AMC uses (the turntable clamps to
+   the same); the worklet's resampler is sized for it. */
+const MIN_RATE = 0.0625;
+const MAX_RATE = 4;
+
+function clampRate(v: number): number {
+  const r = Number(v);
+  if (!(r > 0) || !isFinite(r)) return 1;
+  return Math.max(MIN_RATE, Math.min(MAX_RATE, r));
+}
 
 export class SoftEngine extends EventTarget {
   readonly role: SoftEngineOptions['role'];
@@ -89,8 +102,14 @@ export class SoftEngine extends EventTarget {
   private _volume = 1;
   private _muted = false;
   private _error: EngineError | null = null;
+  private _rate = 1;
+  private _defaultRate = 1;
+  /** Last rate handed to the spatial renderer. */
+  private rendererRate = 1;
+  /** Object count per segment, from the spatial processor's stats. */
+  private objectsBySeg = new Map<number, number>();
   private seekingTo: number | null = null;
-  private pos = { gen: -1, media: 0, time: 0, playing: false, stream: 0 };
+  private pos = { gen: -1, media: 0, time: 0, playing: false, stream: 0, rate: 1 };
   private queued = 0;
   private floor = 0;
   private lastReturned = 0;
@@ -150,6 +169,34 @@ export class SoftEngine extends EventTarget {
     this.emit('volumechange');
   }
 
+  /** The playback rate: source seconds per second. Anything but 1 plays
+      like vinyl — the pitch moves with the speed. */
+  get playbackRate(): number {
+    return this._rate;
+  }
+  set playbackRate(v: number) {
+    const r = clampRate(v);
+    if (r === this._rate) return;
+    this._rate = r;
+    this.toWorklet({ t: 'rate', rate: r });
+    this.emit('ratechange');
+  }
+  /** The rate a newly opened track starts at (an element's load() resets
+      playbackRate to defaultPlaybackRate; open() does the same). */
+  get defaultPlaybackRate(): number {
+    return this._defaultRate;
+  }
+  set defaultPlaybackRate(v: number) {
+    const r = clampRate(v);
+    if (r === this._defaultRate) return;
+    this._defaultRate = r;
+    this.emit('ratechange');
+  }
+  /** The engine resamples: the pitch always follows the rate. */
+  get preservesPitch(): boolean {
+    return false;
+  }
+
   get currentTime(): number {
     if (this.seekingTo !== null) return this.seekingTo;
     const info = this.info;
@@ -162,7 +209,10 @@ export class SoftEngine extends EventTarget {
     let t = this.pos.media / info.sampleRate;
     const ctx = this.ctx;
     if (this.pos.playing && ctx && ctx.state === 'running') {
-      t += Math.min(0.25, Math.max(0, ctx.currentTime - this.pos.time)) - this.latency();
+      /* Output time since the report, minus what is still in the output
+         pipeline, in source seconds at the reported rate. */
+      const r = this.pos.rate > 0 ? this.pos.rate : 1;
+      t += (Math.min(0.25, Math.max(0, ctx.currentTime - this.pos.time)) - this.latency()) * r;
     }
     t = Math.max(t, this.floor, this.lastReturned);
     t = Math.max(0, Math.min(t, info.duration || t));
@@ -232,14 +282,21 @@ export class SoftEngine extends EventTarget {
     this.startSec = Math.max(0, startSec || 0);
     this.floor = this.startSec;
     this.lastReturned = this.startSec;
-    this.pos = { gen: -1, media: 0, time: 0, playing: false, stream: 0 };
+    this.pos = { gen: -1, media: 0, time: 0, playing: false, stream: 0, rate: this._defaultRate };
     this.starving = false;
     this.startedGen = -1;
     this.nextSeg = -1;
     this.nextReady = false;
     this.startSent = -1;
+    this.objectsBySeg.clear();
     if (this.renderer) this.renderer.reset();
     this.toWorklet({ t: 'flush', gen: this.gen });
+    /* Like the element's load(): the new track starts at the default rate. */
+    if (this._rate !== this._defaultRate) {
+      this._rate = this._defaultRate;
+      this.toWorklet({ t: 'rate', rate: this._rate });
+      this.emit('ratechange');
+    }
     this.ensureWorker();
     this.toWorker({ t: 'open', gen: this.gen, seg: this.seg, src, startSec: this.startSec, spatial: !!getSpatialRendererFactory() });
     this.emit('emptied');
@@ -490,6 +547,7 @@ export class SoftEngine extends EventTarget {
     node.port.postMessage({ t: 'port', port: ch.port1 }, [ch.port1]);
     this.toWorker({ t: 'port', port: ch.port2 }, [ch.port2]);
     node.port.postMessage({ t: 'flush', gen: this.gen });
+    node.port.postMessage({ t: 'rate', rate: this._rate });
     if (this.tapFn) node.port.postMessage({ t: 'tap', on: true });
     this.setupRenderer(ctx, info);
   }
@@ -519,7 +577,7 @@ export class SoftEngine extends EventTarget {
     if (this.renderer) return;
     try {
       const sp = info.spatial as NonNullable<TrackInfo['spatial']>;
-      const r = (factory as NonNullable<typeof factory>)(ctx, sp.bedChannels, sp.objectChannels);
+      const r = (factory as NonNullable<typeof factory>)(ctx, sp.bedLayout, sp.objectChannels);
       try {
         node.disconnect();
       } catch {
@@ -527,7 +585,9 @@ export class SoftEngine extends EventTarget {
       }
       node.connect(r.input);
       r.output.connect(gain);
-      r.setMode(this.spatialMode(ctx));
+      r.setMode(this.spatialModeFor(ctx));
+      this.rendererRate = this.pos.gen === this.gen && this.pos.rate > 0 ? this.pos.rate : this._rate;
+      r.setRate(this.rendererRate);
       this.renderer = r;
     } catch (e) {
       this.log('The spatial renderer failed — playing the bed only', (e as Error).message);
@@ -536,18 +596,29 @@ export class SoftEngine extends EventTarget {
     }
   }
 
-  private spatialMode(ctx: AudioContext): SpatialOutputMode {
+  private spatialModeFor(ctx: AudioContext): SpatialOutputMode {
     const m = this.opts.spatialMode ? this.opts.spatialMode() : 'speakers';
     return m || (ctx.destination.maxChannelCount >= 6 ? 'multichannel' : 'speakers');
   }
 
   /** Re-applies the spatial output mode (Settings changed). */
   refreshSpatialMode(): void {
-    if (this.renderer && this.ctx) this.renderer.setMode(this.spatialMode(this.ctx));
+    if (this.renderer && this.ctx) this.renderer.setMode(this.spatialModeFor(this.ctx));
   }
 
   get spatialActive(): boolean {
     return !!this.renderer;
+  }
+
+  /** The spatial renderer's current output mode (null when none runs). */
+  get spatialMode(): SpatialOutputMode | null {
+    return this.renderer && this.ctx ? this.spatialModeFor(this.ctx) : null;
+  }
+
+  /** Objects the spatial processor reports for the playing track (its
+      stats.objects; 0 until the first object frame). */
+  get spatialObjects(): number {
+    return this.objectsBySeg.get(this.seg) || 0;
   }
 
   private scheduleSuspend(): void {
@@ -586,7 +657,7 @@ export class SoftEngine extends EventTarget {
         this.info = m.info;
         this.infoBySeg.set(m.seg, m.info);
         this.opened = true;
-        this.pos = { gen: this.gen, media: Math.round(this.startSec * m.info.sampleRate), time: 0, playing: false, stream: 0 };
+        this.pos = { gen: this.gen, media: Math.round(this.startSec * m.info.sampleRate), time: 0, playing: false, stream: 0, rate: this._rate };
         this.emit('durationchange');
         this.emit('loadedmetadata');
         this.emit('loadeddata');
@@ -596,7 +667,7 @@ export class SoftEngine extends EventTarget {
         return;
       case 'seeked':
         if (m.gen !== this.gen || this.seekingTo === null || !this.info) return;
-        this.pos = { gen: this.gen, media: Math.round(this.seekingTo * this.info.sampleRate), time: this.ctx ? this.ctx.currentTime : 0, playing: false, stream: this.pos.stream };
+        this.pos = { gen: this.gen, media: Math.round(this.seekingTo * this.info.sampleRate), time: this.ctx ? this.ctx.currentTime : 0, playing: false, stream: this.pos.stream, rate: this.pos.rate };
         this.seekingTo = null;
         this.emit('timeupdate');
         this.emit('seeked');
@@ -629,6 +700,11 @@ export class SoftEngine extends EventTarget {
         }
         this.emit('keyframes', { blockStartFrame: m.blockStartFrame, count: m.keyframes.length });
         return;
+      case 'objects':
+        if (m.gen !== this.gen) return;
+        this.objectsBySeg.set(m.seg, m.objects);
+        if (m.seg === this.seg) this.emit('spatialchange', { objects: m.objects });
+        return;
       default:
         return;
     }
@@ -639,10 +715,16 @@ export class SoftEngine extends EventTarget {
       case 'pos': {
         if (m.gen !== this.gen) return;
         if (m.seg !== this.seg) return; /* the 'segment' message switches first */
-        this.pos = { gen: m.gen, media: m.media, time: m.time, playing: m.playing, stream: m.stream };
+        this.pos = { gen: m.gen, media: m.media, time: m.time, playing: m.playing, stream: m.stream, rate: m.rate > 0 ? m.rate : 1 };
         this.queued = m.queued;
         if (this.renderer) {
           try {
+            /* Rate first: the played frame is then mapped at the right speed.
+               Small steps are left to the renderer's drift re-anchoring. */
+            if (Math.abs(this.pos.rate - this.rendererRate) > 0.002 || (this.pos.rate === 1 && this.rendererRate !== 1)) {
+              this.rendererRate = this.pos.rate;
+              this.renderer.setRate(this.rendererRate);
+            }
             this.renderer.setPlayedFrame(m.stream);
           } catch {
             /* the add-on's problem */
@@ -687,8 +769,9 @@ export class SoftEngine extends EventTarget {
         this.nextReady = false;
         this.floor = 0;
         this.lastReturned = 0;
-        this.pos = { gen: this.gen, media: 0, time: this.ctx ? this.ctx.currentTime : 0, playing: true, stream: m.stream };
+        this.pos = { gen: this.gen, media: 0, time: this.ctx ? this.ctx.currentTime : 0, playing: true, stream: m.stream, rate: this.pos.rate };
         this.emit('segment', { seg: m.seg, source: this.src });
+        if (this.objectsBySeg.has(m.seg)) this.emit('spatialchange', { objects: this.objectsBySeg.get(m.seg) });
         this.emit('durationchange');
         this.emit('timeupdate');
         return;
@@ -711,7 +794,7 @@ export class SoftEngine extends EventTarget {
     if (this.info) {
       this.floor = this.info.duration;
       this.lastReturned = this.info.duration;
-      this.pos = { gen: this.gen, media: this.info.frames, time: 0, playing: false, stream: this.pos.stream };
+      this.pos = { gen: this.gen, media: this.info.frames, time: 0, playing: false, stream: this.pos.stream, rate: this.pos.rate };
     }
     this.toWorklet({ t: 'pause' });
     this.emit('timeupdate');
@@ -767,6 +850,10 @@ export class SoftEngine extends EventTarget {
       destinationChannels: this.ctx ? this.ctx.destination.channelCount : 0,
       info: this.info,
       spatial: !!this.renderer,
+      spatialMode: this.spatialMode,
+      spatialObjects: this.spatialObjects,
+      rate: this._rate,
+      reportedRate: this.pos.rate,
       gain: this.gain ? this.gain.gain.value : null,
       queuedFrames: this.queued,
       latency: this.latency(),

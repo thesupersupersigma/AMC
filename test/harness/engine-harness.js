@@ -131,7 +131,7 @@ window.H = {
   /** Test-only spatial add-on: renderer registered in this realm, the
       processor in a Worker built from test/spatial/spatial-worker.ts. */
   newSpatialEngine() {
-    const log = { created: [], modes: [], keyframes: [], played: [], resets: 0, disposed: 0 };
+    const log = { created: [], modes: [], rates: [], keyframes: [], played: [], resets: 0, disposed: 0 };
     registerSpatial(() => null, makeTestRenderer(log));
     this.spatialLog = log;
     engine.dispose();

@@ -28,8 +28,9 @@ export const bedPositions: Record<string, [number, number, number]> = {
   WR: [1, 0, 0.6774190068244934],
 };
 
-/** Bed layouts the renderer can infer from a channel count alone (the
-    factory is not told `bedLayout`; docs/atmos/PLAN.md §7). */
+/** A bed layout for a bare channel count. The renderer factory is given
+    the processor's labels; this is for callers that only have a count
+    (the test pages). */
 export function bedLayoutFor(bedChannels: number): string[] {
   switch (bedChannels) {
     case 0:

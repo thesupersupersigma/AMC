@@ -22,6 +22,8 @@ export const testProcessorFactory: SpatialProcessorFactory = (info: SpatialStrea
   let blocks = 0;
   return {
     maxChannels: 7,
+    bedLayout: LAYOUT,
+    stats: { objects: 1 },
     process(packet: Uint8Array, core: Float32Array[]): SpatialBlock | null {
       if (!packet.length || !core.length) return null;
       const n = core[0].length;
@@ -42,8 +44,9 @@ export const testProcessorFactory: SpatialProcessorFactory = (info: SpatialStrea
 };
 
 export interface RendererLog {
-  created: Array<{ bed: number; objects: number }>;
+  created: Array<{ bed: number; bedLayout: string[]; objects: number }>;
   modes: SpatialOutputMode[];
+  rates: number[];
   keyframes: Array<{ blockStartFrame: number; x: number; y: number }>;
   played: number[];
   resets: number;
@@ -51,8 +54,8 @@ export interface RendererLog {
 }
 
 export function makeTestRenderer(log: RendererLog): SpatialRendererFactory {
-  return (ctx: AudioContext, bedChannels: number, objectChannels: number): SpatialRenderer => {
-    log.created.push({ bed: bedChannels, objects: objectChannels });
+  return (ctx: AudioContext, bedLayout: readonly string[], objectChannels: number): SpatialRenderer => {
+    log.created.push({ bed: bedLayout.length, bedLayout: bedLayout.slice(), objects: objectChannels });
     const node = ctx.createGain();
     node.channelCountMode = 'max';
     return {
@@ -66,6 +69,9 @@ export function makeTestRenderer(log: RendererLog): SpatialRendererFactory {
       },
       setPlayedFrame(frame: number): void {
         log.played.push(frame);
+      },
+      setRate(rate: number): void {
+        if (log.rates) log.rates.push(rate);
       },
       reset(): void {
         log.resets++;

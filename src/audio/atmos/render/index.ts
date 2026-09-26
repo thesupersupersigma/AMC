@@ -10,11 +10,15 @@
      → per-mode graph (graphs.ts) → fade gain → output → engine gain node.
    On a mode change the new graph fades in over 30 ms while the old one
    fades out; the old one is then disconnected. Positions drive AudioParam
-   automation scheduled from the keyframe timeline (timeline.ts). */
+   automation scheduled from the keyframe timeline (timeline.ts).
+
+   Frames are SOURCE frames. At a playback rate r (setRate) they advance r
+   times faster than the context clock, so every frame <-> time mapping
+   below divides or multiplies by sampleRate * rate. */
 
 import type { SpatialKeyframe, SpatialOutputMode, SpatialRenderer, SpatialRendererFactory } from '../../spatial/contract';
 import { buildGraph, type Graph } from './graphs';
-import { bedLayoutFor, multichannelLayout } from './layouts';
+import { multichannelLayout } from './layouts';
 import { KeyframeTimeline, TrackScheduler } from './timeline';
 
 /** Seconds of automation kept scheduled ahead of the played position. */
@@ -49,17 +53,19 @@ class AtmosRenderer implements SpatialRenderer {
   private active: LiveGraph | null = null;
   private retiring: LiveGraph[] = [];
   private anchor: { frame: number; time: number } | null = null;
+  /** Source frames per output frame (the playback rate). */
+  private rate = 1;
   private savedDestination: DestinationState | null = null;
   private disposed = false;
   private readonly frameToTime = (frame: number): number => {
     const a = this.anchor!;
-    return a.time + (frame - a.frame) / this.sampleRate;
+    return a.time + (frame - a.frame) / (this.sampleRate * this.rate);
   };
 
-  constructor(private readonly ctx: BaseAudioContext, bedChannels: number, private readonly objects: number) {
-    const total = bedChannels + objects;
+  constructor(private readonly ctx: BaseAudioContext, bedLayout: readonly string[], private readonly objects: number) {
+    const total = bedLayout.length + objects;
     this.sampleRate = ctx.sampleRate;
-    this.bed = bedLayoutFor(bedChannels);
+    this.bed = bedLayout.slice();
     this.timeline = new KeyframeTimeline(objects);
     this.splitter = ctx.createChannelSplitter(Math.max(1, total));
     this.input = this.splitter;
@@ -123,7 +129,7 @@ class AtmosRenderer implements SpatialRenderer {
       if (changedFrom <= g.scheduler.lastScheduledFrame) {
         g.scheduler.rescheduleFrom(current, now);
       }
-      g.scheduler.extend(current + horizonSeconds * this.sampleRate, this.frameToTime);
+      g.scheduler.extend(current + this.horizonFrames(), this.frameToTime);
     }
   }
 
@@ -132,13 +138,34 @@ class AtmosRenderer implements SpatialRenderer {
     const now = this.ctx.currentTime;
     this.retireFinished(now);
     const predicted = this.anchor ? this.currentFrame(now) : NaN;
-    const reanchor = !this.anchor || !(Math.abs(predicted - frame) <= driftSeconds * this.sampleRate);
+    const reanchor = !this.anchor || !(Math.abs(predicted - frame) <= driftSeconds * this.sampleRate * Math.max(1, this.rate));
     if (reanchor) this.anchor = { frame, time: now };
     const current = reanchor ? frame : predicted;
     this.timeline.prune(Math.min(frame, current));
     for (const g of this.liveGraphs()) {
       if (reanchor) g.scheduler.rescheduleFrom(current, now);
-      g.scheduler.extend(current + horizonSeconds * this.sampleRate, this.frameToTime);
+      g.scheduler.extend(current + this.horizonFrames(), this.frameToTime);
+    }
+  }
+
+  setRate(rate: number): void {
+    if (this.disposed) return;
+    const r = rate > 0 && isFinite(rate) ? rate : 1;
+    if (Math.abs(r - this.rate) < 1e-6) return;
+    const now = this.ctx.currentTime;
+    if (!this.anchor) {
+      this.rate = r;
+      return;
+    }
+    // Re-anchor where the old rate says playback is now, then schedule on
+    // at the new rate; the next setPlayedFrame corrects any residue.
+    const current = this.currentFrame(now);
+    this.anchor = { frame: current, time: now };
+    this.rate = r;
+    this.retireFinished(now);
+    for (const g of this.liveGraphs()) {
+      g.scheduler.rescheduleFrom(current, now);
+      g.scheduler.extend(current + this.horizonFrames(), this.frameToTime);
     }
   }
 
@@ -180,14 +207,19 @@ class AtmosRenderer implements SpatialRenderer {
 
   private currentFrame(now: number): number {
     const a = this.anchor!;
-    return a.frame + (now - a.time) * this.sampleRate;
+    return a.frame + (now - a.time) * this.sampleRate * this.rate;
+  }
+
+  /** The automation horizon in source frames: horizonSeconds of context time. */
+  private horizonFrames(): number {
+    return horizonSeconds * this.sampleRate * this.rate;
   }
 
   private startAutomation(scheduler: TrackScheduler, now: number): void {
     if (this.anchor) {
       const current = this.currentFrame(now);
       scheduler.rescheduleFrom(current, now);
-      scheduler.extend(current + horizonSeconds * this.sampleRate, this.frameToTime);
+      scheduler.extend(current + this.horizonFrames(), this.frameToTime);
     } else if (this.timeline.keyframes.length) {
       scheduler.rescheduleFrom(this.timeline.keyframes[0].frame, now);
     } else {
@@ -262,5 +294,5 @@ class AtmosRenderer implements SpatialRenderer {
 
 export type { AtmosRenderer };
 
-export const createAtmosRenderer: SpatialRendererFactory = (ctx, bedChannels, objectChannels) =>
-  new AtmosRenderer(ctx, bedChannels, objectChannels);
+export const createAtmosRenderer: SpatialRendererFactory = (ctx, bedLayout, objectChannels) =>
+  new AtmosRenderer(ctx, bedLayout, objectChannels);

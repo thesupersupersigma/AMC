@@ -516,11 +516,11 @@ test('spatial hook: a test processor sizes the worklet, feeds the renderer, rese
     H.newEngine();
     return out;
   });
-  assert.deepEqual(r.st1.info, { maxChannels: 7, bedChannels: 6, objectChannels: 1 });
+  assert.deepEqual(r.st1.info, { maxChannels: 7, bedLayout: ['FL', 'FR', 'FC', 'LFE', 'SL', 'SR'], bedChannels: 6, objectChannels: 1 });
   assert.equal(r.st1.channels, 7);
   assert.equal(r.st1.nodeChannels, 7, 'worklet sized to maxChannels');
   assert.equal(r.st1.spatial, true, 'renderer inserted');
-  assert.deepEqual(r.created[0], { bed: 6, objects: 1 });
+  assert.deepEqual(r.created[0], { bed: 6, bedLayout: ['FL', 'FR', 'FC', 'LFE', 'SL', 'SR'], objects: 1 }, 'the processor\'s bed layout reaches the renderer factory');
   assert.ok(r.modes.includes('headphones'), 'setMode applied: ' + r.modes);
   assert.equal(r.tapChannels, 7);
   assert.ok(Math.abs(r.objMin - 0.25) < 1e-6 && Math.abs(r.objMax - 0.25) < 1e-6, 'object channel played from SpatialBlock.pcm: ' + r.objMin + '..' + r.objMax);

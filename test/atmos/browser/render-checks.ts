@@ -4,6 +4,7 @@
    AMC-original test code. */
 
 import { createAtmosRenderer } from '../../../src/audio/atmos/render';
+import { bedLayoutFor } from '../../../src/audio/atmos/render/layouts';
 import type { SpatialKeyframe, SpatialOutputMode, SpatialPosition, SpatialRenderer } from '../../../src/audio/spatial/contract';
 
 const SR = 48000;
@@ -62,7 +63,7 @@ interface RunOptions {
 async function render(opt: RunOptions): Promise<{ channels: Float32Array[]; mode: string | null }> {
   const length = Math.round(opt.seconds * SR);
   const ctx = new OfflineAudioContext(opt.outChannels, length, SR);
-  const renderer: SpatialRenderer = createAtmosRenderer(ctx as unknown as AudioContext, BED, OBJECTS);
+  const renderer: SpatialRenderer = createAtmosRenderer(ctx as unknown as AudioContext, bedLayoutFor(BED), OBJECTS);
   renderer.setMode(opt.mode);
 
   // Source: the object signal on channel 1; the played-frame counter

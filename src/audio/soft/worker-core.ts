@@ -3,7 +3,9 @@
    file), decodes, trims to the audible window, and posts planar float32
    chunks (transferred, not copied) straight to the AudioWorklet over a
    MessagePort. It keeps ~2 s buffered and refills below ~1 s, driven by
-   the worklet's read-head reports.
+   the worklet's read-head reports. Those are seconds of LISTENING: at a
+   playback rate above 1 the worklet drains the buffer that many times
+   faster, so both marks scale with the rate it reports.
 
    Gapless: a queued next segment is demuxed ahead of time and spliced in
    the moment the current one's last packet is decoded — the worklet sees
@@ -44,6 +46,8 @@ interface Segment {
   backend: Backend;
   info: TrackInfo;
   spatial: SpatialProcessor | null;
+  /** Last object count relayed to the main thread. */
+  objects: number;
   outChannels: number;
   /** Next packet to submit. */
   next: number;
@@ -88,6 +92,8 @@ export function startDecodeWorker(scope: WorkerScope): void {
   let genStart = 0;
   let head = 0;
   let headGen = -1;
+  /** The worklet's playback rate (source frames per output frame). */
+  let rate = 1;
   let pumping = false;
 
   const toWorklet = (m: ToWorklet, transfer?: Transferable[]): void => {
@@ -177,9 +183,12 @@ export function startDecodeWorker(scope: WorkerScope): void {
         spatial = null;
       }
       if (spatial) {
-        const max = Math.max(coreChannels, Math.min(32, spatial.maxChannels | 0));
+        /* The processor's own bed (Atmos: ['LFE']); every other channel up
+           to maxChannels is an object. */
+        const bedLayout = Array.from(spatial.bedLayout || []);
+        const max = Math.max(1, bedLayout.length, Math.min(32, spatial.maxChannels | 0));
         outChannels = max;
-        spatialInfo = { maxChannels: max, bedChannels: coreChannels, objectChannels: max - coreChannels };
+        spatialInfo = { maxChannels: max, bedLayout, bedChannels: bedLayout.length, objectChannels: max - bedLayout.length };
       }
     }
     const info: TrackInfo = {
@@ -203,6 +212,7 @@ export function startDecodeWorker(scope: WorkerScope): void {
       backend,
       info,
       spatial,
+      objects: 0,
       outChannels,
       next: 0,
       cursor: 0,
@@ -256,6 +266,11 @@ export function startDecodeWorker(scope: WorkerScope): void {
     return stream + (pending ? pending.frames : 0) - h;
   }
 
+  /** `sec` seconds of listening at the current rate, in source frames. */
+  function aheadFrames(s: Segment, sec: number): number {
+    return sec * s.info.sampleRate * Math.max(1, rate);
+  }
+
   function flushPending(): void {
     const p = pending;
     pending = null;
@@ -301,6 +316,11 @@ export function startDecodeWorker(scope: WorkerScope): void {
         if (block && block.pcm.length) {
           planes = block.pcm;
           keyframes = block.keyframes;
+        }
+        const n = s.spatial.stats ? s.spatial.stats.objects | 0 : 0;
+        if (n !== s.objects) {
+          s.objects = n;
+          post({ t: 'objects', gen, seg: s.seg, objects: n });
         }
       } catch (e) {
         log('The spatial processor threw — playing the 5.1 core from here', (e as Error).message);
@@ -406,7 +426,7 @@ export function startDecodeWorker(scope: WorkerScope): void {
         const s = cur;
         if (!s || !started || !port) break;
         if (s.eosSent) break;
-        if (buffered() >= TARGET_SEC * s.info.sampleRate) break;
+        if (buffered() >= aheadFrames(s, TARGET_SEC)) break;
         try {
           if (s.submittedAll) await finishSegment(s, g);
           else await decodeBatch(s, g);
@@ -612,13 +632,14 @@ export function startDecodeWorker(scope: WorkerScope): void {
     if (m.gen !== gen) return;
     head = m.head;
     headGen = m.gen;
+    rate = m.rate > 0 ? m.rate : 1;
     /* The worklet has crossed into the current segment: the spliced-out one
        can go. */
     if (prev && cur && m.seg === cur.seg) {
       closeSegment(prev);
       prev = null;
     }
-    if (cur && started && !cur.eosSent && buffered() < LOW_SEC * cur.info.sampleRate) void pump();
+    if (cur && started && !cur.eosSent && buffered() < aheadFrames(cur, LOW_SEC)) void pump();
   }
 
   function attachPort(p: MessagePort): void {

@@ -142,8 +142,8 @@ async function renderMode(run: Awaited<ReturnType<typeof runWorker>>, mode: Spat
   const ctx = new OfflineAudioContext(outChannels, totalFrames, SR);
   const factory = getSpatialRendererFactory();
   if (!factory) throw new Error('no renderer factory registered');
-  const bedChannels = blocks[0].bedChannels;
-  const renderer = factory(ctx as unknown as AudioContext, bedChannels, maxChannels - bedChannels);
+  const bedLayout = blocks[0].bedLayout;
+  const renderer = factory(ctx as unknown as AudioContext, bedLayout, maxChannels - bedLayout.length);
   renderer.setMode(mode);
 
   // The Worklet: every block's channels, unchanged, back to back.

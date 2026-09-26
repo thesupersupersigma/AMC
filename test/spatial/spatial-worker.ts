@@ -4,5 +4,5 @@ import { registerSpatial } from '../../src/audio/spatial/contract';
 import { startDecodeWorker } from '../../src/audio/soft/worker-core';
 import { makeTestRenderer, testProcessorFactory } from './test-processor';
 
-registerSpatial(testProcessorFactory, makeTestRenderer({ created: [], modes: [], keyframes: [], played: [], resets: 0, disposed: 0 }));
+registerSpatial(testProcessorFactory, makeTestRenderer({ created: [], modes: [], rates: [], keyframes: [], played: [], resets: 0, disposed: 0 }));
 startDecodeWorker(self as unknown as Parameters<typeof startDecodeWorker>[0]);

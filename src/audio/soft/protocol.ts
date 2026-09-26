@@ -8,7 +8,7 @@
    hands to both, so audio never waits on a busy main thread. The worklet
    reports its read head to both sides.
 
-   Frame vocabulary:
+   Frame vocabulary (all in SOURCE frames, whatever the playback rate):
      media frame  — position within the track's audible timeline (0 = first
                     frame after encoder priming); media / sampleRate = seconds
      stream frame — a monotonic counter over everything the worker ever sent
@@ -40,7 +40,9 @@ export interface TrackInfo {
   decoderVersion: string;
   /** E-AC-3 carries Atmos (JOC) object data. */
   joc: boolean;
-  spatial: { maxChannels: number; bedChannels: number; objectChannels: number } | null;
+  /** A spatial processor runs for this track: the worklet plays its bed
+      (`bedLayout`, e.g. ['LFE'] for Atmos) plus `objectChannels` objects. */
+  spatial: { maxChannels: number; bedLayout: string[]; bedChannels: number; objectChannels: number } | null;
 }
 
 /* ---------- main → worker ---------- */
@@ -67,6 +69,8 @@ export type FromWorker =
   | { t: 'error'; gen: number; seg: number; message: string; code: number }
   | { t: 'log'; message: string; detail?: string }
   | { t: 'keyframes'; gen: number; blockStartFrame: number; keyframes: SpatialKeyframe[] }
+  /* The spatial processor's object count changed (its stats.objects). */
+  | { t: 'objects'; gen: number; seg: number; objects: number }
   | { t: 'peaks'; id: number; data: { duration: number; pairs: number[] } | null; error?: string }
   | { t: 'peaksProgress'; id: number; fraction: number }
   | { t: 'analysis'; id: number; data: EngineAnalysis | null; error?: string };
@@ -97,13 +101,15 @@ export type MainToWorklet =
   | { t: 'flush'; gen: number }
   | { t: 'play' }
   | { t: 'pause' }
+  /* Playback rate (source frames per output frame), ramped over one quantum. */
+  | { t: 'rate'; rate: number }
   | { t: 'tap'; on: boolean }
   | { t: 'dispose' };
 
 /* ---------- worklet → main (node.port) ---------- */
 
 export type FromWorklet =
-  | { t: 'pos'; gen: number; seg: number; media: number; stream: number; time: number; playing: boolean; queued: number }
+  | { t: 'pos'; gen: number; seg: number; media: number; stream: number; time: number; playing: boolean; queued: number; rate: number }
   | { t: 'started'; gen: number; seg: number }
   | { t: 'underrun'; gen: number }
   | { t: 'resumed'; gen: number }
@@ -113,7 +119,7 @@ export type FromWorklet =
 
 /* ---------- worklet → worker (MessagePort) ---------- */
 
-export type WorkletToWorker = { t: 'level'; gen: number; seg: number; head: number };
+export type WorkletToWorker = { t: 'level'; gen: number; seg: number; head: number; rate: number };
 
 /** MediaError-compatible codes. */
 export const MEDIA_ERR_DECODE = 3;
