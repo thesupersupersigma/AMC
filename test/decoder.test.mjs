@@ -134,10 +134,17 @@ test('fixtures against ffmpeg reference PCM', { skip: !fixtureFiles.length && 'n
       /* ffmpeg applies the edit list (encoder priming), so the reference is
          the trimmed stream — exactly what the engine plays. */
       const playable = Math.min(demux.playFrames, frames - demux.startSkip);
-      assert.equal(playable, ref.length / channels, 'frame count vs reference');
+      const refFrames = ref.length / channels;
+      /* ALAC must match exactly. For (E-)AC-3, ffmpeg's decoder ignores the
+         edit list's END trim (it plays the encoder padding) while AMC honours
+         it, and the edit list is only millisecond-precise — so allow up to
+         one codec frame of difference and compare the overlap. */
+      if (demux.codec === 'alac') assert.equal(playable, refFrames, 'frame count vs reference');
+      else assert.ok(Math.abs(playable - refFrames) <= 1536, 'frame count ' + playable + ' vs reference ' + refFrames);
+      const compare = Math.min(playable, refFrames);
       if (!mod.isStub) {
         let worst = 0;
-        for (let s = 0; s < playable; s++) {
+        for (let s = 0; s < compare; s++) {
           for (let c = 0; c < channels; c++) {
             const d = Math.abs(flat[c][demux.startSkip + s] - ref[s * channels + c]);
             if (d > worst) worst = d;

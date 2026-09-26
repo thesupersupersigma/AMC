@@ -291,7 +291,7 @@ test('ffmpeg fixtures demux', { skip: !fixtures.length && 'no fixtures — run s
       assert.ok(d.offsets[d.count - 1] + d.sizes[d.count - 1] <= bytes.length);
       assert.ok(log.maxRead < 1048576, 'no read over 1 MB (' + log.maxRead + ')');
       if (d.codec === 'ec-3') assert.equal(d.channels, 6);
-      if (/moov-end/.test(name)) assert.ok(d.moovStart > bytes.length / 2);
+      if (/moov-end/.test(name)) assert.ok(d.moovStart > d.offsets[d.count - 1], 'moov after the audio data');
       const ref = join(FIXTURES, name.replace(/\.m4a$/, '.f32'));
       if (existsSync(ref)) {
         const frames = readFileSync(ref).length / 4 / d.channels;
