@@ -6,6 +6,9 @@
      npm run build:file
      node --test test/browser/release-file.e2e.mjs
 
+   AMC_BUILD_URL runs the same UI checks against a SERVED build instead
+   (e.g. `npm run build && npx vite preview` → http://localhost:4173/).
+
    Production code has no debug handle, so this drives the UI and reads the
    DOM. Audio output is measured by an init script that records every
    AudioContext node connected to a destination, and by captureStream() on
@@ -23,6 +26,7 @@ import { findFfmpeg, makeReleaseLibrary } from '../helpers/release-library.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const BUILD = join(ROOT, 'dist-file/index.html');
+const SERVED = process.env.AMC_BUILD_URL || '';
 const ATMOS = process.env.AMC_ATMOS_FILE || join(ROOT, 'test/private/get-on-the-floor.m4a');
 const HAVE_ATMOS = existsSync(ATMOS);
 const FFMPEG = findFfmpeg();
@@ -35,7 +39,7 @@ const pageErrors = [];
 const consoleErrors = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = (label, v) => console.log('# ' + label + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
-const skip = (!existsSync(BUILD) && 'no dist-file/index.html — run npm run build:file') || (!FFMPEG && 'no ffmpeg (set AMC_FFMPEG)');
+const skip = (!SERVED && !existsSync(BUILD) && 'no dist-file/index.html — run npm run build:file') || (!FFMPEG && 'no ffmpeg (set AMC_FFMPEG)');
 
 before(async () => {
   if (skip) return;
@@ -57,7 +61,7 @@ before(async () => {
   page.on('console', (m) => {
     if (m.type() === 'error') consoleErrors.push(m.text());
   });
-  await page.goto(pathToFileURL(BUILD).href);
+  await page.goto(SERVED || pathToFileURL(BUILD).href);
   await page.waitForSelector('#picker', { state: 'attached' });
   await page.setInputFiles('#picker', join(tmp, 'Music'));
   await page.click('text=Songs');
@@ -139,7 +143,7 @@ async function activityLog() {
   return text || '';
 }
 
-test('file:// single-file build: the page is really on file://', { skip }, async () => {
+test('file:// single-file build: the page is really on file://', { skip: skip || (SERVED && 'served build') }, async () => {
   const r = await page.evaluate(() => ({ protocol: location.protocol, origin: String(self.origin), sw: 'serviceWorker' in navigator && !!navigator.serviceWorker.controller, fsa: 'showDirectoryPicker' in window }));
   report('page', r);
   assert.equal(r.protocol, 'file:');
@@ -217,7 +221,7 @@ test('file:// Settings shows the Cavern credit', { skip }, async () => {
   const t = await page.textContent('#setAtmosCredit');
   assert.match(t, /Cavern by VoidX/);
   const running = await page.textContent('.settings');
-  assert.match(running, /Running from a file/);
+  if (!SERVED) assert.match(running, /Running from a file/);
 });
 
 test('file:// no page errors', { skip }, () => {
