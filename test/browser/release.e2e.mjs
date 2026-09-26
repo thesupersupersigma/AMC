@@ -83,18 +83,16 @@ before(async () => {
     const H = (window.__rel = {});
     /** Rising zero crossings per second of `x` (a pure tone: its frequency). */
     H.freq = (x, rate) => {
-      let n = 0;
-      let first = -1;
-      let last = -1;
-      for (let i = 1; i < x.length; i++) {
-        if (x[i - 1] < 0 && x[i] >= 0) {
-          const at = i - 1 + -x[i - 1] / (x[i] - x[i - 1]);
-          if (first < 0) first = at;
-          last = at;
-          n++;
-        }
-      }
-      return n > 1 ? ((n - 1) * rate) / (last - first) : 0;
+      /* A pure tone's frequency: the median period between rising zero
+         crossings, so a dropout in a capture is one outlier interval,
+         not a lost stretch of the count. */
+      const at = [];
+      for (let i = 1; i < x.length; i++) if (x[i - 1] < 0 && x[i] >= 0) at.push(i - 1 + -x[i - 1] / (x[i] - x[i - 1]));
+      if (at.length < 3) return 0;
+      const d = [];
+      for (let i = 1; i < at.length; i++) d.push(at[i] - at[i - 1]);
+      d.sort((a, b) => a - b);
+      return rate / d[d.length >> 1];
     };
     /** Analysers on a node's output, one per channel. */
     H.tapNode = (ctx, node, channels) => {

@@ -69,18 +69,16 @@ before(async () => {
   await page.evaluate(() => {
     const H = (window.__rel = {});
     H.freq = (x, rate) => {
-      let n = 0;
-      let first = -1;
-      let last = -1;
-      for (let i = 1; i < x.length; i++) {
-        if (x[i - 1] < 0 && x[i] >= 0) {
-          const at = i - 1 + -x[i - 1] / (x[i] - x[i - 1]);
-          if (first < 0) first = at;
-          last = at;
-          n++;
-        }
-      }
-      return n > 1 ? ((n - 1) * rate) / (last - first) : 0;
+      /* A pure tone's frequency: the median period between rising zero
+         crossings, so a dropout in a capture is one outlier interval,
+         not a lost stretch of the count. */
+      const at = [];
+      for (let i = 1; i < x.length; i++) if (x[i - 1] < 0 && x[i] >= 0) at.push(i - 1 + -x[i - 1] / (x[i] - x[i - 1]));
+      if (at.length < 3) return 0;
+      const d = [];
+      for (let i = 1; i < at.length; i++) d.push(at[i] - at[i - 1]);
+      d.sort((a, b) => a - b);
+      return rate / d[d.length >> 1];
     };
     H.rms = (x) => Math.sqrt(x.reduce((s, v) => s + v * v, 0) / x.length);
     /** One analyser on `node`; resolves with 0.74 s of its first channel. */
