@@ -212,7 +212,8 @@ async function elementFreq() {
   return D(async () => {
     const H = window.__rel;
     const t = H.elementOut();
-    await new Promise((r) => setTimeout(r, 900));
+    /* a fresh capture takes a moment to start flowing */
+    await new Promise((r) => setTimeout(r, 1600));
     const [l] = t.read();
     t.close();
     return Math.round(H.freq(l, t.rate));

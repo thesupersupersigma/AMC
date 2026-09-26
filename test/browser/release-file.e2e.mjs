@@ -103,7 +103,9 @@ before(async () => {
       const a = document.getElementById('audio');
       const ctx = new AudioContext();
       const src = ctx.createMediaStreamSource(a.captureStream());
-      const g = await H.grab(ctx, src);
+      /* a fresh capture takes a moment to start flowing: read the last
+         0.74 s of 1.6 s */
+      const g = await H.grab(ctx, src, 1600);
       void ctx.close();
       return { hz: Math.round(H.freq(g.x, g.rate)), rms: +H.rms(g.x).toFixed(4) };
     };
