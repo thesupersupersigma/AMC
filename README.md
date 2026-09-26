@@ -144,6 +144,13 @@ never whole files.
 - **FFmpeg** (libavcodec: the ALAC, AC-3 and E-AC-3 decoders only), LGPL-2.1-or-later, compiled
   to WebAssembly for software decoding of formats the browser can't play. Build script, pinned
   versions, configure line and license text: [`vendor/decoder/`](vendor/decoder/README.md).
+- **Dolby Atmos (E-AC-3 JOC) decoding** in `src/audio/atmos/` is a TypeScript
+  port of parts of [Cavern](https://github.com/VoidXH/Cavern) by VoidX
+  ([en.sbence.hu](http://en.sbence.hu)). That folder is under
+  [Cavern's licence](src/audio/atmos/LICENSE), not AMC's MIT licence: among
+  other terms, it may not be sold and must stay ad-free. See
+  [its README](src/audio/atmos/README.md). "Dolby" and "Dolby Atmos" are
+  trademarks of Dolby Laboratories; AMC is not affiliated with Dolby.
 
 ---
 

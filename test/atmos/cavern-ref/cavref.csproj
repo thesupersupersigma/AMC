@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <NoWarn>CS0649;CS0169;CS0414;CS1591;CS8632</NoWarn>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Optimize>true</Optimize>
+    <CavernDir Condition="'$(CavernDir)' == ''">/tmp/Cavern</CavernDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CavernDir)/Cavern.Format/**/*.cs" Exclude="$(CavernDir)/Cavern.Format/obj/**;$(CavernDir)/Cavern.Format/bin/**" />
+    <Compile Include="Program.cs" />
+    <ProjectReference Include="$(CavernDir)/Cavern/Cavern.csproj" />
+  </ItemGroup>
+</Project>
