@@ -254,11 +254,13 @@ async function speedAndBrake({ page, keys, check }) {
   await page.keyboard.press('Space');
   const u = await up;
   check('play spins up from ~0.1× to full speed over ~0.4 s', u.some((x) => x[1] < 0.5) && u[u.length - 1][1] === 1, u.map((x) => x[1]));
-  /* the Media Session / media-key path calls the element's pause() */
+  /* the Media Session / media-key path: the app's own registered 'pause'
+     handler (it calls the playback facade's pause(), which the stop/start
+     effect wraps) */
   await page.waitForTimeout(300);
   const ms = await page.evaluate(async () => {
     const a = document.getElementById('audio');
-    a.pause(); /* exactly what the Media Session 'pause' handler does */
+    window.__msHandlers.pause({ action: 'pause' });
     await new Promise((r) => setTimeout(r, 300));
     const during = { paused: a.paused, rate: a.playbackRate };
     await new Promise((r) => setTimeout(r, 800));

@@ -67,6 +67,19 @@ export async function launch({ width = 1365, height = 611, reducedMotion = 'no-p
     } catch {
       /* older engines */
     }
+    /* The app's Media Session action handlers, so a test can fire exactly
+       what the OS media controls / media keys would. */
+    window.__msHandlers = {};
+    try {
+      const ms = navigator.mediaSession;
+      const orig = ms.setActionHandler.bind(ms);
+      ms.setActionHandler = (action, fn) => {
+        window.__msHandlers[action] = fn;
+        return orig(action, fn);
+      };
+    } catch {
+      /* no Media Session here */
+    }
     window.__mod = (p) => {
       const hit = performance
         .getEntriesByType('resource')

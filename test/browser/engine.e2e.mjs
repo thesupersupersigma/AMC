@@ -168,15 +168,33 @@ test('volume and mute change the real output level', async () => {
 });
 
 test('E-AC-3 5.1: a six-channel worklet, downmixed by the destination', async () => {
-  const s = await loadAndPlay('eac3');
+  /* A plain (non-JOC) stream: the core, no spatial processor. */
+  const s = await loadAndPlay('eac3plain');
   assert.equal(s.info.codec, 'ec-3');
   assert.equal(s.info.channels, 6);
-  assert.equal(s.info.joc, true);
+  assert.equal(s.info.joc, false);
+  assert.equal(s.info.spatial, null);
   assert.equal(s.ctxRate, 48000);
   await sleep(1200);
   const st = await state();
   assert.equal(st.nodeChannels, 6);
+  assert.equal(st.spatial, false);
   assert.ok(st.destinationChannels === 2 || st.destinationChannels === 6);
+  assert.ok((await ct()) > 0.5);
+});
+
+test('E-AC-3 with a JOC dec3: the registered Atmos processor sizes the worklet to LFE + objects', async () => {
+  /* Since the 2.3.0 merge src/audio/spatial/register.ts registers the Atmos
+     add-on in the Worker realm: dec3 complexity_index 16 → 1 + 16 channels,
+     a one-channel LFE bed, and the renderer between worklet and gain. */
+  const s = await loadAndPlay('eac3');
+  assert.equal(s.info.joc, true);
+  assert.deepEqual(s.info.spatial, { maxChannels: 17, bedLayout: ['LFE'], bedChannels: 1, objectChannels: 16 });
+  assert.equal(s.info.channels, 17);
+  await sleep(1200);
+  const st = await state();
+  assert.equal(st.nodeChannels, 17);
+  assert.equal(st.spatial, true, 'Atmos renderer inserted');
   assert.ok((await ct()) > 0.5);
 });
 
@@ -428,6 +446,10 @@ test('waveform peaks: sparse decode in a worker, existing pairs format (real aud
     const f = H.flacFile('peaks.m4a', { seconds: 10 });
     const progress = [];
     const data = await H.generateEnginePeaks({ file: f, codec: 'fLaC', name: f.name }, 1500, (x) => progress.push(x), { devCodecs: true });
+    const probe = H.newEngine({ allowWebCodecs: false });
+    H.load(H.alacFile('stub-probe.m4a', { seconds: 1 }), 'alac');
+    for (let i = 0; i < 50 && !probe.trackInfo; i++) await new Promise((res) => setTimeout(res, 50));
+    const isStub = !!(probe.trackInfo && probe.trackInfo.isStub);
     const stub = await H.generateEnginePeaks({ file: H.alacFile('stub.m4a', { seconds: 3 }), codec: 'alac', name: 'stub' }, 1500);
     let mn = 1;
     let mx = -1;
@@ -435,13 +457,15 @@ test('waveform peaks: sparse decode in a worker, existing pairs format (real aud
       mn = Math.min(mn, data.pairs[i]);
       mx = Math.max(mx, data.pairs[i + 1]);
     }
-    return { len: data.pairs.length, duration: data.duration, mn, mx, progress: progress.length, stub };
+    return { len: data.pairs.length, duration: data.duration, mn, mx, progress: progress.length, stub: stub && { len: stub.pairs.length }, isStub };
   });
   assert.equal(r.len, 3000);
   assert.ok(Math.abs(r.duration - 10) < 1e-6);
   assert.ok(r.mx > 0.45 && r.mx < 0.51 && r.mn < -0.45 && r.mn > -0.51, 'envelope ' + r.mn + ' .. ' + r.mx);
   assert.ok(r.progress > 5, 'progress reports');
-  assert.equal(r.stub, null, 'the silent stub yields no peaks (nothing cached)');
+  /* The silent stub yields no peaks (nothing cached); the real decoder does. */
+  if (r.isStub) assert.equal(r.stub, null, 'the silent stub yields no peaks (nothing cached)');
+  else assert.equal(r.stub && r.stub.len, 3000, 'the real decoder yields ALAC peaks');
 });
 
 test('track-break analysis streams the whole file and finds the gap', async () => {

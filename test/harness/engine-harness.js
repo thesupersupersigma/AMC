@@ -58,6 +58,7 @@ const makers = {
   alac: () => [alacFile('synthetic-alac.m4a'), 'alac'],
   alac96: () => [alacFile('synthetic-alac-96k.m4a', { rate: 96000, bits: 24, seconds: 8 }), 'alac'],
   eac3: () => [eac3File('synthetic-eac3.m4a'), 'ec-3'],
+  eac3plain: () => [eac3File('synthetic-eac3-plain.m4a', 20, false), 'ec-3'],
   flac: () => [flacFile('synthetic-flac.m4a'), 'fLaC'],
 };
 

@@ -149,7 +149,12 @@ test('E-AC-3 (Atmos edition) plays in the engine with the right label', async ()
   await page.waitForFunction(() => window.__amcDebug.media.path === 'engine' && window.__amcDebug.S.current.title === 'Get Up', null, { timeout: 8000 });
   await page.waitForFunction(() => window.__amcDebug.media.engineInfo() && window.__amcDebug.media.currentTime > 0.3, null, { timeout: 8000 });
   const chip = await page.getAttribute('#pbTitle .soft-chip', 'title');
-  assert.ok(chip && chip.startsWith('Dolby Digital Plus (5.1 · Atmos objects not rendered)'), chip);
+  /* Since the 2.3.0 merge the Atmos processor decodes the objects: "Dolby
+     Atmos · n objects" once it reports a count, "Dolby Atmos" before that
+     (this synthetic stream carries a JOC dec3 but no object frames). */
+  assert.ok(chip && /^Dolby Atmos( · \d+ objects)? — /.test(chip), chip);
+  const spatial = await page.evaluate(() => window.__amcDebug.media.engineInfo().spatial);
+  assert.deepEqual(spatial && spatial.bedLayout, ['LFE'], 'LFE bed + objects');
   const log = await activityLog();
   assert.ok(log.includes("ec-3 isn't supported natively here — using software decoding"), log);
 });
@@ -190,19 +195,29 @@ test('Settings: turning software decoding off restores today’s behaviour', asy
   assert.equal(await page.evaluate(() => window.__amcDebug.S.softDecode), true);
 });
 
-test('Settings: "Spatial audio output" appears only once a renderer is registered, and persists', async () => {
+test('Settings: "Spatial audio output" shows while a spatial renderer is registered (the Atmos add-on registers one), and persists', async () => {
+  await page.click('#settingsBtn');
+  await page.waitForSelector('[data-set="softdecode"]');
+  /* Since the 2.3.0 merge the Atmos add-on registers its renderer at load. */
+  assert.ok(await page.$('[data-set-spatial]'), 'shown: the Atmos renderer is registered');
+  assert.match(await page.$eval('#setAtmosCredit', (el) => el.textContent), /Cavern by VoidX/, 'the Cavern credit is shown');
+  assert.deepEqual(
+    await page.$$eval('#setAtmosCredit a', (as) => as.map((a) => a.getAttribute('href'))),
+    ['http://en.sbence.hu', 'https://github.com/VoidXH/Cavern']
+  );
+  /* Without a registered renderer the row stays hidden. */
+  await page.evaluate(async () => {
+    const c = await import('/src/audio/spatial/contract.ts');
+    window.__savedSpatial = [c.getSpatialProcessorFactory(), c.getSpatialRendererFactory()];
+    c.registerSpatial(null, null);
+  });
+  await page.click('text=Albums');
   await page.click('#settingsBtn');
   await page.waitForSelector('[data-set="softdecode"]');
   assert.equal(await page.$('[data-set-spatial]'), null, 'hidden without a spatial add-on');
   await page.evaluate(async () => {
     const c = await import('/src/audio/spatial/contract.ts');
-    c.registerSpatial(
-      () => null,
-      (ctx) => {
-        const g = ctx.createGain();
-        return { input: g, output: g, setMode() {}, pushKeyframes() {}, setPlayedFrame() {}, reset() {}, dispose() {} };
-      }
-    );
+    c.registerSpatial(window.__savedSpatial[0], window.__savedSpatial[1]);
   });
   await page.click('text=Albums');
   await page.click('#settingsBtn');
@@ -217,10 +232,7 @@ test('Settings: "Spatial audio output" appears only once a renderer is registere
     return { state: window.__amcDebug.S.spatialMode, stored: raw ? JSON.parse(raw).spatialMode : null };
   });
   assert.deepEqual(saved, { state: 'headphones', stored: 'headphones' });
-  await page.evaluate(async () => {
-    const c = await import('/src/audio/spatial/contract.ts');
-    c.registerSpatial(null, null);
-  });
+  await page.selectOption('[data-set-spatial]', 'auto');
 });
 
 test('no page errors', () => {
