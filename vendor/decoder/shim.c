@@ -16,7 +16,12 @@
      dec_close(handle).
    Output is always planar float32. Integer formats are scaled exactly the
    way libswresample does it (s16 * 2^-15, s32 * 2^-31), so ALAC output is
-   bit-identical to `ffmpeg -f f32le`. */
+   bit-identical to `ffmpeg -f f32le`.
+
+   AC-3 / E-AC-3 open with dynamic range compression OFF (drc_scale 0,
+   i.e. `ffmpeg -drc_scale 0`): AMC plays music, not a late-night film mix,
+   and it matches Cavern's core, which the Atmos objects are derived from
+   (docs/atmos/PLAN.md §7). */
 
 #include <stdint.h>
 #include <string.h>
@@ -24,6 +29,7 @@
 #include <emscripten/emscripten.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/dict.h>
 #include <libavutil/log.h>
 #include <libavutil/mem.h>
 
@@ -93,7 +99,12 @@ EMSCRIPTEN_KEEPALIVE AmcDec *dec_open(int codec_id, const uint8_t *extradata, in
   if (sample_rate > 0) d->ctx->sample_rate = sample_rate;
   if (channels > 0) av_channel_layout_default(&d->ctx->ch_layout, channels);
   d->ctx->thread_count = 1;
-  if (avcodec_open2(d->ctx, codec, NULL) < 0) {
+  /* The (E-)AC-3 decoders' private option: no dynamic range compression. */
+  AVDictionary *opts = NULL;
+  if (id == AV_CODEC_ID_AC3 || id == AV_CODEC_ID_EAC3) av_dict_set(&opts, "drc_scale", "0", 0);
+  int err = avcodec_open2(d->ctx, codec, &opts);
+  av_dict_free(&opts);
+  if (err < 0) {
     dec_close(d);
     return NULL;
   }

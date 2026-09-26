@@ -54,8 +54,12 @@ EXPRS='0.3*sin(2*PI*300*t)|0.3*sin(2*PI*500*t)|0.3*sin(2*PI*700*t)|0.3*sin(2*PI*
 rm -f "$OUT/cover-noise.jpg"
 
 # References: ffmpeg's own decode, edit lists applied, interleaved f32le.
+# (E-)AC-3 without dynamic range compression, as vendor/decoder/shim.c
+# opens those decoders (drc_scale 0).
 for f in "$OUT"/*.m4a; do
-  "${FF[@]}" -i "$f" -map 0:a:0 -f f32le -acodec pcm_f32le "${f%.m4a}.f32"
+  DEC=()
+  case "$(basename "$f")" in *ac3*) DEC=(-drc_scale 0) ;; esac
+  "${FF[@]}" "${DEC[@]}" -i "$f" -map 0:a:0 -f f32le -acodec pcm_f32le "${f%.m4a}.f32"
 done
 
 ls -la "$OUT"

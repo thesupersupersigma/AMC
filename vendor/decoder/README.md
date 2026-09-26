@@ -5,25 +5,27 @@
 | Codec | MP4 sample entry | Output |
 |---|---|---|
 | Apple Lossless | `alac` | planar float32, bit-exact |
-| Dolby Digital | `ac-3` | planar float32 |
-| Dolby Digital Plus (incl. Atmos editions: the 5.1 bed; objects aren't rendered) | `ec-3` | planar float32 |
+| Dolby Digital | `ac-3` | planar float32, no dynamic range compression |
+| Dolby Digital Plus (incl. Atmos editions: the 5.1 core; `src/audio/atmos/` decodes the objects from it) | `ec-3` | planar float32, no dynamic range compression |
 
 It's FFmpeg's libavcodec with those three decoders and nothing else, plus `shim.c`, compiled to a
 standalone WebAssembly module. There's no demuxer: AMC reads MP4 sample tables itself
 (`src/audio/mp4samples.ts`) and feeds one MP4 sample per call.
 
-## Status in this commit: STUB
+## Status
 
-> **The committed `decoder.wasm` is a silent placeholder** built from `stub/stub.c`. It has the
-> same ABI and returns the right number of *silent* frames per packet, so the whole engine
-> (Worker, Worklet, playback facade) runs end to end. The session that wrote this couldn't
-> install Emscripten.
->
-> To get the real decoder, run the **build-decoder** workflow once (Actions → build-decoder →
-> Run workflow → branch `feat/decode-engine`). It builds with the pinned toolchain, runs the
-> decoder tests against ffmpeg-made reference PCM, and commits `decoder.wasm` + `BUILDINFO.txt`
-> back to the branch. AMC logs `software decoder is a silent stub` in the activity panel until
-> then.
+The committed `decoder.wasm` is the real FFmpeg build from the **build-decoder** workflow;
+`BUILDINFO.txt` records the toolchain, the FFmpeg commit, the size and the sha256. (`stub/` is a
+silent placeholder with the same ABI, for building without Emscripten; AMC logs `software
+decoder is a silent stub` in the activity panel whenever it runs.) After any change to
+`shim.c` or `build.sh`, run the workflow again (Actions → build-decoder → Run workflow → the
+branch): it builds with the pinned toolchain, runs the decoder tests against ffmpeg-made
+reference PCM, and commits `decoder.wasm` + `BUILDINFO.txt` back to that branch.
+
+**Dynamic range compression is off.** `shim.c` opens the AC-3 and E-AC-3 decoders with
+`drc_scale = 0` (the same as `ffmpeg -drc_scale 0`): AMC plays music, and the Atmos objects are
+derived from this core, which then matches Cavern's (it applies no DRC). `scripts/make-fixtures.sh`
+makes the (E-)AC-3 reference PCM the same way.
 
 ## Files
 
