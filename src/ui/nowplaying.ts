@@ -8,9 +8,11 @@
    opacity; prefers-reduced-motion disables the transitions in CSS. */
 
 import type { AnyTrack } from '../types';
-import { FULL, S, coverURL, haveCover } from '../state';
-import { audio } from '../audio/engine';
-import { next, prev, togglePlay } from './player';
+import { S, coverURL, haveCover } from '../state'; // hires-art hook: FULL folded into art/hero
+import { media } from '../audio/media';
+import { heroArt, heroFor, heroURLNow, setImgDecoded } from '../art/hero'; // hires-art hook
+import { ttDeckMarkup, ttModeButton, ttSpeedMarkup, turntableClick, turntableClosed, turntableOpened, turntableTrackChanged, wireTurntable } from './turntable/turntable'; // turntable hook
+import { currentFormatLabel, next, prev, togglePlay } from './player';
 import { paintWaveInto } from './waveform';
 import { toggleLyrics } from './lyrics';
 import { icon, solid } from './icons';
@@ -148,9 +150,11 @@ function markup(): string {
     '<button type="button" class="np-close pb-btn" id="npClose" title="Close" aria-label="Close Now Playing">' + icon('chev') + '</button>' +
     '<div class="np-inner">' +
     '<div class="np-art"><img id="npArt" alt=""></div>' +
+    ttDeckMarkup() + // turntable hook
     '<div class="np-side">' +
     '<div class="np-title" id="npTitle"></div>' +
     '<div class="np-artist" id="npArtist"></div>' +
+    '<div class="np-format" id="npFormat"></div>' +
     '<div class="np-scrub"><canvas id="npWave"></canvas>' +
     '<input id="npScrubBar" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within the track"></div>' +
     '<div class="np-times"><span id="npElapsed">0:00</span><span id="npRemain">-0:00</span></div>' +
@@ -159,14 +163,16 @@ function markup(): string {
     '<button type="button" class="pb-btn np-play" id="npPlay" aria-label="Play or pause"></button>' +
     '<button type="button" class="pb-btn" id="npNext" aria-label="Next">' + icon('next') + '</button>' +
     '<button type="button" class="pb-btn" id="npLyrics" title="Lyrics" aria-label="Lyrics">' + icon('lyrics') + '</button>' +
+    ttModeButton() + // turntable hook
     '</div>' +
+    ttSpeedMarkup() + // turntable hook
     '</div></div>'
   );
 }
 
 function trackWindow(t: AnyTrack): { start: number; end: number } {
   if (t.kind === 'virtual') return { start: t.startSec, end: t.endSec || t.startSec + (t.duration || 0) };
-  return { start: 0, end: t.duration || audio.duration || 0 };
+  return { start: 0, end: t.duration || media.duration || 0 };
 }
 
 function refreshNow(): void {
@@ -176,18 +182,24 @@ function refreshNow(): void {
     if (art) art.removeAttribute('src');
     return;
   }
-  const url = FULL.key === t.coverKey && FULL.url ? FULL.url : coverURL(t.coverKey);
-  if (art) {
-    if (url) art.src = url;
-    else art.removeAttribute('src');
+  /* hires-art hook: the hero once minted (decoded before it swaps in),
+     the thumb until then. */
+  const url = heroURLNow(t) || coverURL(t.coverKey);
+  if (art) setImgDecoded(art, url);
+  if (!heroArt(t)) {
+    void heroFor(t).then((h) => {
+      if (h && open && S.current === t) refreshNow();
+    });
   }
   const title = document.getElementById('npTitle');
   const artist = document.getElementById('npArtist');
   if (title) title.textContent = t.title;
   if (artist) artist.textContent = t.artist + (t.album ? ' — ' + t.album : '');
+  const fmt = document.getElementById('npFormat');
+  if (fmt) fmt.textContent = currentFormatLabel();
   const w = trackWindow(t);
   const dur = Math.max(0.001, w.end - w.start);
-  const pos = Math.max(0, (audio.currentTime || 0) - w.start);
+  const pos = Math.max(0, (media.currentTime || 0) - w.start);
   const el = document.getElementById('npElapsed');
   const rm = document.getElementById('npRemain');
   if (el) el.textContent = fmtTime(pos);
@@ -195,7 +207,7 @@ function refreshNow(): void {
   const bar = document.getElementById('npScrubBar') as HTMLInputElement | null;
   if (bar && !scrubbing) bar.value = String(Math.round((pos / dur) * 1000));
   const play = document.getElementById('npPlay');
-  if (play) play.innerHTML = audio.paused ? solid('play') : solid('pause');
+  if (play) play.innerHTML = media.paused ? solid('play') : solid('pause');
   const cv = document.getElementById('npWave') as HTMLCanvasElement | null;
   if (cv) {
     if (!cv.width || cv.width !== Math.round(cv.clientWidth * (window.devicePixelRatio || 1))) {
@@ -225,11 +237,13 @@ export function openNowPlaying(): void {
   updateAmbient(S.current);
   refreshNow();
   timer = setInterval(refreshNow, 300);
+  turntableOpened(); // turntable hook
 }
 
 export function closeNowPlaying(): void {
   if (!open) return;
   open = false;
+  turntableClosed(); // turntable hook
   if (timer) clearInterval(timer);
   timer = null;
   const view = $('#npview');
@@ -248,6 +262,7 @@ export function closeNowPlaying(): void {
 
 /** Track-change hook from the player: retint always, refresh if open. */
 export function nowPlayingTrackChanged(): void {
+  turntableTrackChanged(); // turntable hook
   updateAmbient(S.current);
   if (open) {
     if (!S.current) closeNowPlaying();
@@ -258,6 +273,7 @@ export function nowPlayingTrackChanged(): void {
 /* ---------- wiring ---------- */
 
 export function wireNowPlaying(): void {
+  wireTurntable(); // turntable hook
   $('#pbArt').addEventListener('click', () => {
     if (S.current) openNowPlaying();
   });
@@ -267,6 +283,7 @@ export function wireNowPlaying(): void {
   const view = $('#npview');
   view.addEventListener('click', (e) => {
     const target = e.target as Element;
+    if (turntableClick(target)) return; // turntable hook
     if (target.closest('#npClose')) {
       closeNowPlaying();
       return;
@@ -315,7 +332,7 @@ export function wireNowPlaying(): void {
       const w = trackWindow(S.current);
       const frac = Number(bar.value) / 1000;
       try {
-        audio.currentTime = w.start + frac * Math.max(0, w.end - w.start);
+        media.currentTime = w.start + frac * Math.max(0, w.end - w.start);
       } catch {
         /* not seekable right now */
       }

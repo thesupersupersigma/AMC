@@ -4,6 +4,7 @@
    for a 42-minute side; resampling during decode lands near 80 MB. */
 
 import { bucketPeaks } from './peaks';
+import { analyzeWithEngine } from './soft/soft-engine';
 
 const ANALYSIS_RATE = 8000;
 const WINDOW_SEC = 0.05; /* 50 ms RMS windows */
@@ -53,6 +54,21 @@ export async function analyzeForSplit(file: File, durationHint: number): Promise
     if (v > peakRms) peakRms = v;
   }
 
+  const { silences, proposals } = silencesFromRms(rms, peakRms, win, decoded.sampleRate, duration);
+
+  return {
+    duration: duration,
+    peaks: bucketPeaks(channels, 1500),
+    silences: silences,
+    proposals: proposals,
+  };
+}
+
+/** Silence runs and proposed boundaries from windowed RMS values. Shared by
+    the OfflineAudioContext path above and the software engine's streaming
+    analysis (engine formats the browser cannot decode). */
+export function silencesFromRms(rms: Float32Array, peakRms: number, win: number, sampleRate: number, duration: number): { silences: SilenceRun[]; proposals: number[] } {
+  const windows = rms.length;
   /* A window is silent when it sits far below the loudest material; runs
      longer than 1.5 s are track gaps. */
   const threshold = Math.max(1e-4, peakRms * 0.02);
@@ -63,7 +79,7 @@ export async function analyzeForSplit(file: File, durationHint: number): Promise
     const silent = w < windows && rms[w] < threshold;
     if (silent && runStart < 0) runStart = w;
     else if (!silent && runStart >= 0) {
-      if (w - runStart >= minRun) silences.push({ start: (runStart * win) / decoded.sampleRate, end: (w * win) / decoded.sampleRate });
+      if (w - runStart >= minRun) silences.push({ start: (runStart * win) / sampleRate, end: (w * win) / sampleRate });
       runStart = -1;
     }
   }
@@ -73,11 +89,15 @@ export async function analyzeForSplit(file: File, durationHint: number): Promise
   const proposals = silences
     .filter((s) => s.start > 2 && s.end < duration - 2)
     .map((s) => Math.max(0, s.end - 0.15));
+  return { silences, proposals };
+}
 
-  return {
-    duration: duration,
-    peaks: bucketPeaks(channels, 1500),
-    silences: silences,
-    proposals: proposals,
-  };
+/** "Find track breaks" for formats only the software engine decodes (ALAC,
+    AC-3, E-AC-3 here): a streaming decode in the engine's Worker, reduced
+    on the fly — the file is never held in memory, whatever its length. */
+export async function analyzeEngineForSplit(file: File, codec: string, onProgress?: (fraction: number) => void): Promise<SplitAnalysis> {
+  const a = await analyzeWithEngine({ file, codec, name: file.name }, WINDOW_SEC, onProgress);
+  if (!a) throw new Error('the software decoder is the silent placeholder — nothing to analyse yet');
+  const { silences, proposals } = silencesFromRms(a.rms, a.peakRms, a.win, a.sampleRate, a.duration);
+  return { duration: a.duration, peaks: a.pairs, silences, proposals };
 }

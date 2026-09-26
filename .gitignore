@@ -3,3 +3,5 @@ node_modules/
 dist/
 dist-file/
 dev-dist/
+vendor/decoder/.build/
+test/private/

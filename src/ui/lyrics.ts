@@ -5,13 +5,13 @@
    ~0.92 scale, and the whole block eases into place through ONE transform
    transition — a transition, not a scroll. With Enhanced LRC, each word
    fills left-to-right through a background-clip:text gradient. Everything
-   is driven from requestAnimationFrame reading audio.currentTime —
+   is driven from requestAnimationFrame reading media.currentTime —
    timeupdate fires ~4×/sec and visibly stutters against word timing.
    prefers-reduced-motion collapses it all to a plain highlight. */
 
 import type { AnyTrack, LrcLine } from '../types';
 import { S, refOf } from '../state';
-import { audio } from '../audio/engine';
+import { media } from '../audio/media';
 import { resolveLyrics, saveLyrics, sidecarLyricsRel, type ResolvedLyrics } from '../net/lyrics';
 import { parseLrc, buildLrcText } from '../parse/lrc';
 import { folderById } from '../fs/folders';
@@ -38,7 +38,7 @@ function baseOf(t: AnyTrack): number {
 }
 function relTime(): number {
   const c = S.current;
-  return c ? Math.max(0, (audio.currentTime || 0) - baseOf(c)) : 0;
+  return c ? Math.max(0, (media.currentTime || 0) - baseOf(c)) : 0;
 }
 
 const SOURCE_LABELS: Record<ResolvedLyrics['source'], string> = {
@@ -187,7 +187,7 @@ function tick(): void {
       }
     }
   }
-  if (!audio.paused) rafId = requestAnimationFrame(tick);
+  if (!media.paused) rafId = requestAnimationFrame(tick);
 }
 
 function setActiveLine(idx: number): void {
@@ -289,11 +289,11 @@ export function wireLyrics(): void {
     if (!editing) enterEditor();
   });
 
-  audio.addEventListener('play', () => {
+  media.addEventListener('play', () => {
     if (open && cur && cur.synced && !editing) startLoop();
   });
   /* A paused track needs no loop; hidden tabs suspend rAF anyway. */
-  audio.addEventListener('pause', stopLoop);
+  media.addEventListener('pause', stopLoop);
   if (reduced && typeof reduced.addEventListener === 'function') {
     reduced.addEventListener('change', () => {
       if (open && !editing) renderView();
@@ -347,7 +347,7 @@ export function wireLyrics(): void {
       const l = cur.lines[i];
       if (l && l.timeSec >= 0) {
         try {
-          audio.currentTime = baseOf(S.current) + l.timeSec + 0.01;
+          media.currentTime = baseOf(S.current) + l.timeSec + 0.01;
         } catch {
           /* not seekable right now */
         }

@@ -7,16 +7,26 @@
    plain sentence saying what needs a served build and why. */
 
 import type { ConnectedFolder } from '../types';
-import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs } from '../state';
+import { S, SCHEMA_VERSION, applyAccent, libraryTracks, savePrefs, type SpatialModePref } from '../state';
+import { media } from '../audio/media';
+import { getSpatialRendererFactory } from '../audio/spatial/contract';
+import { ATMOS_CREDIT } from '../audio/atmos/labels';
 import { addFolderViaPicker, connectedFolders, folderById, pendingFolders, removeFolder, reorderFolder } from '../fs/folders';
 import { enqueueFolderScan, rescanLibrary } from '../scan/scanner';
 import { ST_COVERS, ST_TRACKS, idbClear } from '../db/idb';
 import { logErr } from './log';
 import { icon } from './icons';
 import { esc, plural, toast, $ } from '../util';
+import { artworkSectionHTML, wireArtworkSettings } from '../art/settings-ui'; // hires-art hook
 
 const ACCENTS = ['', '#fa243c', '#ff9f0a', '#30d158', '#0a84ff', '#bf5af2', '#ff375f'];
 const XFADES = [0, 3, 6, 9];
+const SPATIAL_MODES: Array<[SpatialModePref, string]> = [
+  ['auto', 'Auto'],
+  ['headphones', 'Headphones'],
+  ['speakers', 'Speakers'],
+  ['multichannel', 'Multichannel'],
+];
 
 /* ---------- the view ---------- */
 
@@ -58,7 +68,14 @@ export function viewSettings(): string {
 
   /* Playback */
   h += '<div class="set-sect"><h2>Playback</h2>';
-  h += '<label class="set-row set-check"><input type="checkbox" data-set="gapless"' + (S.gapless ? ' checked' : '') + '> Gapless cue playback <span class="set-hint">— advance between tracks of one rip without a seek or reload</span></label>';
+  h += '<label class="set-row set-check"><input type="checkbox" data-set="gapless"' + (S.gapless ? ' checked' : '') + '> Gapless cue playback <span class="set-hint">— advance between tracks of one rip without a seek or reload, and between software-decoded album tracks</span></label>';
+  h += '<label class="set-row set-check"><input type="checkbox" data-set="softdecode"' + (S.softDecode ? ' checked' : '') + '> Software decoding for unsupported formats <span class="set-hint">— Apple Lossless and Dolby Digital (Plus) play through AMC’s own decoder when this browser has none</span></label>';
+  /* Only meaningful once a spatial renderer (the Atmos add-on) is registered. */
+  if (getSpatialRendererFactory()) {
+    h += '<div class="set-row">Spatial audio output <select class="inline-input" data-set-spatial>';
+    for (const [v, label] of SPATIAL_MODES) h += '<option value="' + v + '"' + (S.spatialMode === v ? ' selected' : '') + '>' + label + '</option>';
+    h += '</select><span class="set-hint">for Dolby Atmos tracks — pick Headphones for binaural sound on headphones; Auto picks Multichannel when the output device has 6+ channels, otherwise Speakers</span></div>';
+  }
   h += '<div class="set-row">Crossfade <div class="set-seg">';
   for (const x of XFADES) {
     h += '<button type="button" class="seg-btn' + (S.crossfadeSec === x ? ' on' : '') + '" data-xfade="' + x + '">' + (x === 0 ? 'Off' : x + 's') + '</button>';
@@ -79,6 +96,8 @@ export function viewSettings(): string {
     h += '<button type="button" class="seg-btn' + (S.lyricsSource === v ? ' on' : '') + '" data-lyrsrc="' + v + '">' + label + '</button>';
   }
   h += '</div><span class="set-hint">“Local only” never calls LRCLIB — sidecar, sibling .lrc and tags still work</span></div></div>';
+
+  h += artworkSectionHTML(); // hires-art hook
 
   /* Storage */
   h += '<div class="set-sect"><h2>Storage</h2><div id="setStorage" class="set-hint">Measuring…</div><div class="set-row" id="setPersistRow" hidden><button type="button" class="pill-ghost set-small" data-set="persist">Request persistent storage</button><span class="set-hint">without it the browser may silently evict the saved folders and caches</span></div></div>';
@@ -104,6 +123,9 @@ export function viewSettings(): string {
   }
 
   h += '<div class="set-sect"><p class="set-hint">AMC v' + esc(__AMC_VERSION__) + ' · Schema v' + SCHEMA_VERSION + '</p>' +
+    /* Cavern's licence asks for the creator to be named with a link; AMC
+       stays free and ad-free while src/audio/atmos/ ships (README). */
+    '<p class="set-hint" id="setAtmosCredit">' + esc(ATMOS_CREDIT.text) + ' (<a href="' + esc(ATMOS_CREDIT.creatorUrl) + '" target="_blank" rel="noopener">en.sbence.hu</a>, <a href="' + esc(ATMOS_CREDIT.sourceUrl) + '" target="_blank" rel="noopener">source</a>) — free, ad-free, and under Cavern’s licence. Dolby Atmos is a trademark of Dolby Laboratories; AMC is not affiliated with Dolby.</p>' +
     '<p class="set-hint">AMC is not affiliated with, endorsed by, or connected to Apple Inc. Apple Music is a trademark of Apple Inc.</p>' +
     '<p class="set-hint">Made by <a href="https://github.com/thesupersupersigma" target="_blank" rel="noopener">thesupersupersigma</a> and Claude Fable 5</p>' +
     '</div>';
@@ -306,12 +328,22 @@ async function importSidecarZip(folder: ConnectedFolder, file: File): Promise<vo
 let importTarget = '';
 
 export function wireSettings(): void {
+  wireArtworkSettings(); // hires-art hook
   const zipInput = $('#zippicker') as HTMLInputElement;
   zipInput.addEventListener('change', () => {
     const f = zipInput.files && zipInput.files[0];
     zipInput.value = '';
     const folder = folderById(importTarget);
     if (f && folder) void importSidecarZip(folder, f);
+  });
+
+  $('#view').addEventListener('change', (e) => {
+    const sel = (e.target as Element).closest('[data-set-spatial]') as HTMLSelectElement | null;
+    if (!sel) return;
+    const v = sel.value;
+    S.spatialMode = v === 'headphones' || v === 'speakers' || v === 'multichannel' ? v : 'auto';
+    savePrefs();
+    media.refreshSpatialMode();
   });
 
   $('#view').addEventListener('click', (e) => {
@@ -330,6 +362,11 @@ export function wireSettings(): void {
       } else if (what === 'gapless') {
         S.gapless = (el as HTMLInputElement).checked;
         savePrefs();
+      } else if (what === 'softdecode') {
+        /* Applies from the next track on; whatever plays now keeps playing. */
+        S.softDecode = (el as HTMLInputElement).checked;
+        savePrefs();
+        rerenderIfSettings();
       } else if (what === 'persist') {
         /* A real user gesture — the one place a re-request can succeed. */
         void navigator.storage.persist().then((granted) => {

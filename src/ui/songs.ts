@@ -1,7 +1,7 @@
 /* The song table, sorting, and row selection. */
 
 import type { AnyTrack, PlaylistEntry, RowTrack, SortCol } from '../types';
-import { S, codecLabel, isCodecFailed, isMissingTrack } from '../state';
+import { S, canSoftDecode, codecLabel, engineCodecLabel, isCodecFailed, isMissingTrack } from '../state';
 import { icon, artHTML } from './icons';
 import { esc, fmtDur, norm, $$ } from '../util';
 
@@ -39,7 +39,11 @@ function rowHTML(t: RowTrack, i: number, opts: SongTableOpts): string {
   }
   /* The codec verdict is session state learned by attempt — the row says
      what failed and why, and stays fully clickable to try again. */
-  const codecBad = !missing && !!t.codec && isCodecFailed(t.codec);
+  const failed = !missing && !!t.codec && isCodecFailed(t.codec);
+  /* A failed fourcc the software engine decodes is not a problem: the row
+     only carries a quiet "Software decode" chip. */
+  const soft = failed && canSoftDecode(t.codec);
+  const codecBad = failed && !soft;
   let note = '';
   if (missing) note = '<div class="t-note">' + esc(t.note || 'Not in this folder') + '</div>';
   else if (codecBad) note = '<div class="t-note">' + esc(codecLabel(t.codec as string) + " — this browser couldn't decode it") + '</div>';
@@ -58,7 +62,9 @@ function rowHTML(t: RowTrack, i: number, opts: SongTableOpts): string {
     : '';
   const codec = codecBad
     ? '<span class="codec-badge" title="' + esc(codecLabel(t.codec as string) + " couldn't be decoded by this browser — double-click to try anyway") + '">' + esc((t.codec as string).toUpperCase()) + '</span>'
-    : '';
+    : soft
+      ? '<span class="soft-chip" title="' + esc(engineCodecLabel(t.codec as string) + ' — this browser has no decoder for it, so AMC decodes it in software') + '">Software decode</span>'
+      : '';
   /* Unsplit-rip candidate: this looks like a whole vinyl side. */
   const split = !missing && t.kind !== 'virtual' && t.splitFlag
     ? '<span class="split-badge" title="' +

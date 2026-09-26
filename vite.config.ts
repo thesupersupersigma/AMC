@@ -70,7 +70,8 @@ export default defineConfig(({ mode }) => {
             /* public/site.webmanifest is the one manifest; do not generate another. */
             manifest: false,
             workbox: {
-              globPatterns: ['**/*.{js,css,html,ico,png,webmanifest}'],
+              /* wasm: the software decoder (vendor/decoder) must work offline. */
+              globPatterns: ['**/*.{js,css,html,ico,png,webmanifest,wasm}'],
               navigateFallback: 'index.html',
               navigateFallbackDenylist: [/^\/api\//],
             },

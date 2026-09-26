@@ -1,9 +1,16 @@
 /* App state, the library index, artwork caches, and preferences. */
 
-import type { Album, AnyTrack, Artist, LyricsSource, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types';
+import type { Album, AnyTrack, ArtQuality, Artist, LyricsSource, MetaRec, MissingTrack, Playlist, Prefs, RepeatMode, RowTrack, SortCol, Track } from './types'; // hires-art hook: ArtQuality
 import { $$, clamp, norm } from './util';
 import { ST_COVERS, ST_META, idbGet, idbPut } from './db/idb';
 import { logErr } from './ui/log';
+import { isEngineCodec } from './audio/mp4samples';
+import { engineSupported } from './audio/soft/support';
+import { atmosCodecLabel } from './audio/atmos/labels';
+import { downscaleBlob } from './art/resize'; // hires-art hook
+import { thumbTargetPx } from './art/thumbsize'; // hires-art hook
+
+export type SpatialModePref = 'auto' | 'headphones' | 'speakers' | 'multichannel';
 
 /** Stored-data schema. 2 = real folderIds everywhere (the Phase 1 'local'
     placeholder is never persisted). 3 = overrides and lyrics key cue-carved
@@ -56,6 +63,13 @@ export interface AppState {
   crossfadeSec: number;
   accent: string;
   lyricsSource: LyricsSource;
+  /** Software decoding for formats the browser can't play natively. */
+  softDecode: boolean;
+  spatialMode: SpatialModePref;
+  artQuality: ArtQuality; // hires-art hook
+  npMode: 'cover' | 'turntable'; // turntable hook
+  ttRpm: number; // turntable hook
+  ttBrake: boolean; // turntable hook
 }
 
 export const S: AppState = {
@@ -77,6 +91,9 @@ export const S: AppState = {
   scanning: false, scanDone: 0, scanTotal: 0,
   hasFolder: false,
   gapless: true, crossfadeSec: 0, accent: '', lyricsSource: 'auto',
+  softDecode: true, spatialMode: 'auto',
+  artQuality: 'high', // hires-art hook
+  npMode: 'cover', ttRpm: 100 / 3, ttBrake: true, // turntable hook
 };
 
 /* ---------- album / artist keys ---------- */
@@ -267,6 +284,35 @@ export function codecLabel(codec: string): string {
   return CODEC_LABELS[codec] || codec.toUpperCase();
 }
 
+function layoutName(channels: number): string {
+  if (channels === 1) return 'mono';
+  if (channels === 2) return '2.0';
+  if (channels === 6) return '5.1';
+  if (channels === 8) return '7.1';
+  return channels + ' ch';
+}
+
+/** The label for a track the software engine is playing, from what the
+    decoder actually produced. `objects`: what the Atmos processor reports
+    decoding (its stats.objects), once known. */
+export function engineCodecLabel(codec: string, info?: { coreChannels: number; joc: boolean; spatial: unknown } | null, objects = 0): string {
+  if (codec === 'alac') return 'Apple Lossless';
+  const ch = info ? layoutName(info.coreChannels) : '';
+  if (codec === 'ec-3') {
+    if (info && info.joc && info.spatial) return objects > 0 ? atmosCodecLabel(objects) : 'Dolby Atmos';
+    if (info && info.joc) return 'Dolby Digital Plus (' + ch + ' · Atmos objects not rendered)';
+    return ch ? 'Dolby Digital Plus (' + ch + ')' : 'Dolby Digital Plus';
+  }
+  if (codec === 'ac-3') return ch ? 'Dolby Digital (' + ch + ')' : 'Dolby Digital';
+  return codecLabel(codec);
+}
+
+/** The software engine will play this fourcc: the setting is on, the
+    engine runs in this browser, and the codec is one it decodes. */
+export function canSoftDecode(codec?: string): boolean {
+  return !!codec && S.softDecode && isEngineCodec(codec) && engineSupported();
+}
+
 const failedCodecs = new Set<string>();
 const workingCodecs = new Set<string>();
 
@@ -301,11 +347,25 @@ export function isMissingTrack(t: RowTrack): t is MissingTrack {
   return t.kind === 'missing';
 }
 
-/* ---------- artwork — deduplicated per album, downscaled to ~300px WebP.
-   Object URLs are minted lazily and always revoked. ---------- */
+/* ---------- artwork — two tiers. This section is the THUMB tier:
+   deduplicated per album, sized from the display (art/thumbsize.ts,
+   ~320–400 px) as WebP q0.9. The HERO tier (album header, Now Playing,
+   PiP, Media Session) lives in art/hero.ts, which folded in the old FULL
+   slot. Object URLs are minted lazily and always revoked. ---------- */ // hires-art hook
 
 let COVERS: Record<string, { blob: Blob; url: string | null } | undefined> = {};
-export const FULL: { key: string; url: string } = { key: '', url: '' };
+
+/* art/hero.ts registers here instead of state importing it (no cycle):
+   'stored' invalidates a held hero when an album's cover changes, and
+   'release' drops every hero with the thumbs. */ // hires-art hook
+interface CoverHooks {
+  stored?: (key: string, source: Blob) => void;
+  release?: () => void;
+}
+const coverHooks: CoverHooks = {}; // hires-art hook
+export function setCoverHooks(h: CoverHooks): void { // hires-art hook
+  Object.assign(coverHooks, h);
+}
 
 export function haveCover(key: string): boolean {
   return !!(key && COVERS[key]);
@@ -316,6 +376,13 @@ export function coverURL(key: string): string {
   if (!c) return '';
   if (!c.url) c.url = URL.createObjectURL(c.blob);
   return c.url;
+}
+
+/** The stored thumb itself — art/hero.ts sniffs its size to decide whether
+    it predates the current display size. */ // hires-art hook
+export function coverBlob(key: string): Blob | null {
+  const c = COVERS[key];
+  return c ? c.blob : null;
 }
 
 /** Used when a cover was found in the IndexedDB cover store. */
@@ -344,66 +411,45 @@ export function releaseCovers(): void {
     }
   }
   COVERS = {};
-  releaseFullArt();
+  if (coverHooks.release) coverHooks.release(); // hires-art hook
 }
 
-/* The Media Session holds the artwork URL after we hand it over, so revoking
-   the previous one immediately makes the tray controls fetch a dead URL.
-   Drop the reference now, reclaim the memory a moment later. */
-export function releaseFullArt(): void {
-  const old = FULL.url;
-  FULL.key = '';
-  FULL.url = '';
-  if (!old) return;
+/* A replaced thumb's URL may still be on screen (or held by the Media
+   Session): drop the reference now, reclaim the memory a moment later. */ // hires-art hook
+function revokeLater(url: string): void {
   setTimeout(() => {
     try {
-      URL.revokeObjectURL(old);
+      URL.revokeObjectURL(url);
     } catch {
       /* already gone */
     }
-  }, 1500);
+  }, 4000);
 }
 
 function makeThumb(blob: Blob): Promise<Blob | null> {
   if (!blob) return Promise.resolve(null);
   if (typeof createImageBitmap !== 'function') return Promise.resolve(blob);
-  return createImageBitmap(blob)
-    .then((bmp) => {
-      const max = 300;
-      const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
-      const w = Math.max(1, Math.round(bmp.width * scale));
-      const h = Math.max(1, Math.round(bmp.height * scale));
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d');
-      if (ctx) ctx.drawImage(bmp, 0, 0, w, h);
-      if (bmp.close) bmp.close();
-      return new Promise<Blob>((res) => {
-        try {
-          c.toBlob(
-            (out) => {
-              res(out || blob);
-            },
-            'image/webp',
-            0.82
-          );
-        } catch {
-          res(blob);
-        }
-      });
-    })
+  /* hires-art hook: display-sized (not a fixed 300 px), high-quality
+     resampling, WebP q0.9. */
+  return downscaleBlob(blob, thumbTargetPx(), 'image/webp', 0.9)
+    .then((out) => (out ? out.blob : blob))
     .catch((e: Error) => {
       logErr('artwork', 'Could not resize a cover, keeping the original', e && e.message);
       return blob;
     });
 }
 
-export function storeCover(key: string, blob: Blob | null): Promise<void> {
+/** Makes and stores the album's thumb from a source image. `fromHero`
+    marks a thumb regenerated while art/hero.ts read the album's source —
+    the hero it is minting from that same source stays valid. */
+export function storeCover(key: string, blob: Blob | null, fromHero?: boolean): Promise<void> {
   if (!key || !blob) return Promise.resolve();
+  if (!fromHero && coverHooks.stored) coverHooks.stored(key, blob); // hires-art hook
   return makeThumb(blob)
     .then((thumb) => {
       if (!thumb) return;
+      const prev = COVERS[key]; // hires-art hook
+      if (prev && prev.url) revokeLater(prev.url); // hires-art hook
       COVERS[key] = { blob: thumb, url: null };
       return idbPut(ST_COVERS, { key: key, thumb: thumb }).then(() => undefined);
     })
@@ -463,6 +509,12 @@ export function currentPrefs(): Prefs {
     crossfadeSec: S.crossfadeSec,
     accent: S.accent,
     lyricsSource: S.lyricsSource,
+    softDecode: S.softDecode,
+    spatialMode: S.spatialMode,
+    artQuality: S.artQuality, // hires-art hook
+    npMode: S.npMode, // turntable hook
+    ttRpm: S.ttRpm, // turntable hook
+    ttBrake: S.ttBrake, // turntable hook
   };
 }
 
@@ -504,6 +556,14 @@ export async function seedStateFromPrefs(): Promise<void> {
   S.crossfadeSec = typeof PREFS.crossfadeSec === 'number' ? clamp(PREFS.crossfadeSec, 0, 12) : 0;
   S.accent = typeof PREFS.accent === 'string' ? PREFS.accent : '';
   S.lyricsSource = PREFS.lyricsSource === 'local' || PREFS.lyricsSource === 'off' ? PREFS.lyricsSource : 'auto';
+  S.softDecode = PREFS.softDecode !== false;
+  const sm = PREFS.spatialMode;
+  S.spatialMode = sm === 'headphones' || sm === 'speakers' || sm === 'multichannel' ? sm : 'auto';
+  const aq = PREFS.artQuality; // hires-art hook
+  S.artQuality = aq === 'low' || aq === 'standard' || aq === 'max' ? aq : 'high'; // hires-art hook
+  S.npMode = PREFS.npMode === 'turntable' ? 'turntable' : 'cover'; // turntable hook
+  S.ttRpm = typeof PREFS.ttRpm === 'number' && PREFS.ttRpm >= 16 && PREFS.ttRpm <= 78 ? PREFS.ttRpm : 100 / 3; // turntable hook
+  S.ttBrake = PREFS.ttBrake !== false; // turntable hook
   applyAccent(S.accent);
   S.shuffle = !!PREFS.shuffle;
   S.repeat = PREFS.repeat === 'all' || PREFS.repeat === 'one' ? PREFS.repeat : 'off';
