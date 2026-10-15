@@ -141,6 +141,10 @@ body.np-open.lyrics-open #npview.np-tt .np-inner{transform:none;padding-right:ca
 .tt-rec{z-index:3;border-radius:50%;will-change:transform;
   box-shadow:0 calc(4 * var(--u)) calc(14 * var(--u)) rgba(0,0,0,.55);
 }
+/* the record can be taken by hand and turned (ui/turntable/scratch.ts) */
+.tt-rec{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.tt-rec img{-webkit-user-drag:none}
+#npview.tt-scratching,#npview.tt-scratching .tt-rec{cursor:grabbing}
 .tt-rec-spin{position:absolute;inset:0;border-radius:50%;will-change:transform}
 .tt-vinyl{
   position:absolute;inset:0;border-radius:50%;

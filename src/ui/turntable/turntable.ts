@@ -7,6 +7,7 @@ import { S, coverURL } from '../../state';
 import { heroFor, heroURLNow, setImgDecoded } from '../../art/hero';
 import * as pb from './playback';
 import { armMoveTo, frameStats, noteJump, paintBands, resetFrameStats, seekedByHand, startMotion, stopMotion, wireArmInput } from './motion';
+import { scratchCancel, wireScratchInput } from './scratch';
 import { cancelSwap, swapRunning, swapTo } from './swap';
 import { speedClick, speedEnter, speedLeave, syncSpeedUI, wireSpeedInput } from './speed';
 import { modeButtonMarkup, npMode, setNpMode, speedMarkup, syncModeButton, turntableMarkup } from './view';
@@ -73,6 +74,7 @@ function enter(): void {
 
 function leave(): void {
   active = false;
+  scratchCancel();
   cancelSwap();
   stopMotion();
   speedLeave();
@@ -152,5 +154,6 @@ export function turntableClick(target: Element): boolean {
 export function wireTurntable(): void {
   pb.wirePlayback();
   wireArmInput();
+  wireScratchInput();
   wireSpeedInput();
 }

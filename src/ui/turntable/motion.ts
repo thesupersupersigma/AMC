@@ -45,6 +45,11 @@ let staticAngle = 0;
     lifted off for a swap it keeps the angle it had. */
 let recordOffset = 0;
 let recordFree: number | null = null;
+/** The hand on the record (./scratch): the record's angle comes from it,
+    and so does the time the tonearm and record read. */
+let recordOverride: ((now: number) => number) | null = null;
+let timeOverride: (() => number) | null = null;
+let recordAngle = 0;
 
 /** Per-frame callbacks (the record swap); return false when finished. */
 const frameHooks: Array<(now: number) => boolean> = [];
@@ -99,13 +104,19 @@ function grab(): void {
 
 /* ---------- time → angles ---------- */
 
+/** Playback time — or, while a hand moves the record, where the hand has
+    put it. */
+function deckTime(): number {
+  return timeOverride ? timeOverride() : pb.getTime();
+}
+
 export function timeAngle(): number {
-  return pb.getTime() * DEG_PER_SEC;
+  return deckTime() * DEG_PER_SEC;
 }
 
 export function sideFraction(): number {
   const d = pb.getDuration();
-  return d > 0 ? Math.max(0, Math.min(1, pb.getTime() / d)) : 0;
+  return d > 0 ? Math.max(0, Math.min(1, deckTime() / d)) : 0;
 }
 
 /** Where the arm belongs right now if nothing is animating it. */
@@ -132,6 +143,18 @@ export function overrideSpin(fn: ((now: number) => number) | null): void {
 
 export function overrideArm(fn: ((now: number) => number) | null): void {
   armOverride = fn;
+}
+
+/** Hands the record (and the deck's notion of time) to the hand, and back:
+    null re-seats it on the platter where it is, without a visible jump. */
+export function overrideRecord(angle: ((now: number) => number) | null, time: (() => number) | null): void {
+  if (!angle && recordOverride) recordOffset = recordAngle - platterAngle;
+  recordOverride = angle;
+  timeOverride = time;
+}
+
+export function currentRecordAngle(): number {
+  return recordAngle;
 }
 
 export function setLifted(on: boolean): void {
@@ -188,7 +211,8 @@ function frame(now: number): void {
     if (!frameHooks[i](now)) frameHooks.splice(i--, 1);
   }
 
-  const recAngle = recordFree !== null ? recordFree : platterAngle + recordOffset;
+  const recAngle = recordOverride ? recordOverride(now) : recordFree !== null ? recordFree : platterAngle + recordOffset;
+  recordAngle = recAngle;
   if (elPlatter) elPlatter.style.transform = 'rotate(' + (platterAngle % 360).toFixed(2) + 'deg)';
   if (elSpin) elSpin.style.transform = 'rotate(' + (recAngle % 360).toFixed(2) + 'deg)';
   if (elArm) elArm.style.transform = 'rotate(' + armAngle.toFixed(3) + 'deg)';
@@ -225,6 +249,8 @@ export function stopMotion(): void {
   armOverride = null;
   frameHooks.length = 0;
   armLocked = false;
+  recordOverride = null;
+  timeOverride = null;
   seatRecord();
   setLifted(false);
 }
@@ -237,6 +263,14 @@ export function platterVelocity(): number {
 
 export function isDragging(): boolean {
   return dragging;
+}
+
+export function armIsLocked(): boolean {
+  return armLocked;
+}
+
+export function motionRunning(): boolean {
+  return running;
 }
 
 /** Playback jumped (seek, a new track): the reduced-motion record takes
@@ -445,7 +479,8 @@ export function wireArmInput(): void {
   if (!view) return;
   view.addEventListener('pointerdown', (e) => {
     const head = (e.target as Element).closest('#ttHead') as HTMLElement | null;
-    if (!head || !running || armLocked || !pb.currentTrack()) return;
+    /* (not while a hand is on the record) */
+    if (!head || !running || armLocked || recordOverride || !pb.currentTrack()) return;
     e.preventDefault();
     pointerId = e.pointerId;
     try {
