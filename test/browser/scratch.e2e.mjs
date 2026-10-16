@@ -22,7 +22,7 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -264,24 +264,41 @@ async function turn(deg, ms, { holdMs = 200, during = null } = {}) {
 /** A steady hand, driven from inside the page (Playwright's mouse arrives
     unevenly): turns the record at exactly `degPerSec` for `ms`, then
     measures the voice's pitch and speed while still turning. */
-async function steadyTurn(degPerSec, ms) {
+async function steadyTurn(degPerSec, ms, jitter = false) {
   return D(
-    ([dps, dur]) =>
+    ([dps, dur, jit]) =>
       new Promise((resolve) => {
         const rec = document.getElementById('ttRec');
         const b = rec.getBoundingClientRect();
         const cx = b.left + b.width / 2;
         const cy = b.top + b.height / 2;
         const rad = b.width * 0.36;
+        /* jitter: whole-pixel positions at uneven 4–24 ms gaps, as a real
+           mouse delivers them */
+        const px = (v) => (jit ? Math.round(v) : v);
         const ev = (type, a) =>
-          rec.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, clientX: cx + rad * Math.cos(a), clientY: cy + rad * Math.sin(a) }));
+          rec.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, clientX: px(cx + rad * Math.cos(a)), clientY: px(cy + rad * Math.sin(a)) }));
         const a0 = Math.PI;
         ev('pointerdown', a0);
         const t0 = performance.now();
         let out = null;
+        /* pitch snapshots from 40% of the way on, ~60 ms apart */
+        const hz = [];
+        let nextSnap = dur * 0.4;
+        /* (a fixed pseudo-random sequence, so every run is the same) */
+        let seed = 12345;
+        const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+        const gap = () => (jit ? 4 + rnd() * 20 : 8);
         const step = async () => {
           const t = performance.now() - t0;
           ev('pointermove', a0 + ((dps * Math.PI) / 180) * (t / 1000));
+          if (t > nextSnap && t < dur - 40) {
+            nextSnap = t + 60;
+            const T = window.__voiceTap;
+            const x = new Float32Array(2048);
+            T.an.getFloatTimeDomainData(x);
+            hz.push(window.__freq(x, T.rate));
+          }
           if (!out && t > dur * 0.7) {
             const m = await window.__mod('/src/ui/turntable/scratch.ts');
             const v = m.scratchDebug().voice.debug();
@@ -292,15 +309,17 @@ async function steadyTurn(degPerSec, ms) {
             for (const s of x) peak = Math.max(peak, Math.abs(s));
             out = { vel: v.vel, hz: window.__freq(x, T.rate), peak };
           }
-          if (t < dur) setTimeout(step, 8);
+          if (t < dur) setTimeout(step, gap());
           else {
             ev('pointerup', a0 + ((dps * Math.PI) / 180) * (t / 1000));
+            out.wobble = hz.length ? Math.max(...hz) / Math.min(...hz) - 1 : null;
+            out.snaps = hz.length;
             resolve(out);
           }
         };
-        setTimeout(step, 8);
+        setTimeout(step, gap());
       }),
-    [degPerSec, ms]
+    [degPerSec, ms, jitter]
   );
 }
 
@@ -354,7 +373,8 @@ test('a stopped deck: turning the record cues it, the voice follows the hand bot
   /* Pitch follows speed, both ways, with a steady hand: 440 Hz × speed. */
   await settled();
   const pitch = {};
-  for (const dps of [360, -360, 144]) {
+  /* (1200°/s = 6×: read from the pre-filtered copies) */
+  for (const dps of [360, -360, 144, 1200]) {
     pitch[dps] = await steadyTurn(dps, 900);
     await settled();
   }
@@ -365,6 +385,22 @@ test('a stopped deck: turning the record cues it, the voice follows the hand bot
     assert.ok(Math.abs(r.hz - 440 * Math.abs(speed)) < 0.05 * 440 * Math.abs(speed), `${dps}°/s: ${(440 * Math.abs(speed)).toFixed(0)} Hz (got ${r.hz.toFixed(1)})`);
     /* (the test tone peaks at 0.125) */
     assert.ok(r.peak > 0.05, `${dps}°/s: heard (${r.peak.toFixed(3)})`);
+  }
+
+  /* No buzz: a steady turn with a real mouse's uneven, whole-pixel events
+     holds a steady pitch (the record's weight irons out the steps). */
+  const rough = {};
+  for (const dps of [360, -270, 120]) {
+    rough[dps] = await steadyTurn(dps, 1400, true);
+    await settled();
+  }
+  report('uneven hand', rough);
+  for (const [dps, r] of Object.entries(rough)) {
+    assert.ok(r.snaps >= 8, 'enough snapshots');
+    /* (the previous, buzzing version measured 18–34% here; a slow drag
+       moves only a pixel or two per event, so it keeps a little more) */
+    const tol = Math.abs(Number(dps)) < 200 ? 0.1 : 0.04;
+    assert.ok(r.wobble < tol, `${dps}°/s with an uneven hand: pitch steady to ${(r.wobble * 100).toFixed(1)}%`);
   }
 });
 
@@ -452,4 +488,22 @@ test('ALAC on the software engine: scratches by rate when WebCodecs has no ALAC'
   /* a full turn back: ~1.8 s earlier, plus what played since */
   assert.ok(after.ct < before + 0.2, 'wound back (' + before.toFixed(2) + ' → ' + after.ct.toFixed(2) + ')');
   assert.deepEqual(pageErrors, []);
+});
+
+test('the version tag: tiny, bottom-right, the inverse of what is behind it', { skip }, async () => {
+  const tag = await D(() => {
+    const el = document.getElementById('amcVersion');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const b = el.getBoundingClientRect();
+    return { text: el.textContent, blend: cs.mixBlendMode, color: cs.color, size: cs.fontSize, right: innerWidth - b.right, bottom: innerHeight - b.bottom, events: cs.pointerEvents };
+  });
+  report('version tag', tag);
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+  assert.equal(tag.text, 'v' + pkg.version);
+  assert.equal(tag.blend, 'difference');
+  assert.equal(tag.color, 'rgb(255, 255, 255)');
+  assert.equal(tag.events, 'none');
+  assert.ok(tag.right < 8 && tag.bottom < 8, 'in the corner');
+  await page.screenshot({ path: process.env.AMC_SHOT || join(tmpdir(), 'amc-version-tag.png'), clip: { x: 1265, y: 571, width: 100, height: 40 } });
 });

@@ -241,6 +241,19 @@ async function boot(): Promise<void> {
   await restoreFoldersOnBoot();
 }
 
+/* The version, tiny in the bottom-right corner, so a fresh deploy is easy
+   to confirm. White under mix-blend-mode: difference reads as the inverse
+   of whatever is behind it. */
+function mountVersionTag(): void {
+  if (document.getElementById('amcVersion')) return;
+  const el = document.createElement('div');
+  el.id = 'amcVersion';
+  el.setAttribute('aria-hidden', 'true');
+  el.textContent = 'v' + __AMC_VERSION__;
+  document.body.appendChild(el);
+}
+mountVersionTag();
+
 /* Dev builds only: a handle for the browser tests (test/browser/). The
    production and single-file builds compile this away. */
 if (import.meta.env.DEV) {

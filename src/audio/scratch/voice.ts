@@ -164,10 +164,20 @@ export class ScratchVoice {
           }
           const l = new Float32Array(w.planes[0]);
           const r = new Float32Array(w.planes[1] || w.planes[0]);
+          const frames = l.length;
+          const levels = await buildLevels(l, r);
+          if (file !== this.file || this.blocks.get(k) !== b) continue;
+          if (!levels.length) {
+            this.blocks.delete(k);
+            continue;
+          }
           b.from = w.start;
-          b.to = w.start + l.length / w.rate;
+          b.to = w.start + frames / w.rate;
           b.ready = true;
-          this.post({ t: 'seg', id: b.id, start: w.start, rate: w.rate, l, r }, [l.buffer, r.buffer]);
+          this.post(
+            { t: 'seg', id: b.id, start: w.start, rate: w.rate, levels },
+            levels.flatMap((pl) => [pl[0].buffer, pl[1].buffer])
+          );
         } catch (e) {
           b.failed = true;
           this.logOnce('Scratch decode failed in ' + (file ? file.name : '?'), (e as Error).message || String(e));
@@ -219,8 +229,30 @@ export class ScratchVoice {
     this.rep = { pos, vel: 0, have: this.covers(pos), mode: 'hand', t: performance.now() };
     this.post({ t: 'grab', pos });
   }
-  hand(pos: number, vel: number): void {
-    this.post({ t: 'hand', pos, vel, at: this.ctx.currentTime });
+  /** The hand's path since the last call: [performance.now() ms,
+      position] pairs, stamped onto the audio clock. */
+  hand(pts: number[]): void {
+    if (!pts.length) return;
+    const off = this.clockOffset();
+    const out = new Array<number>(pts.length);
+    for (let k = 0; k + 1 < pts.length; k += 2) {
+      out[k] = pts[k] / 1000 + off;
+      out[k + 1] = pts[k + 1];
+    }
+    this.post({ t: 'hand', pts: out });
+  }
+
+  /** Context time minus performance time (seconds). currentTime moves in
+      render-quantum steps, which would jitter the hand's path, so the
+      offset only eases (and snaps after a suspend, when the audio clock
+      stood still). The worklet measures how late the points arrive on its
+      own clock and replays the path that much later. */
+  private offset = NaN;
+  private clockOffset(): number {
+    const o = this.ctx.currentTime - performance.now() / 1000;
+    if (!isFinite(this.offset) || Math.abs(o - this.offset) > 0.05) this.offset = o;
+    else this.offset += (o - this.offset) * 0.05;
+    return this.offset;
   }
   motor(rate: number): void {
     this.post({ t: 'motor', rate });
@@ -249,6 +281,97 @@ export class ScratchVoice {
   debug(): { pos: number; vel: number; have: boolean; mode: string; kind: string; node: AudioWorkletNode } {
     return { pos: this.rep.pos, vel: this.rep.vel, have: this.rep.have, mode: this.rep.mode, kind: this.sourceKind, node: this.node };
   }
+}
+
+/* ---------- pre-filtered copies for fast spins ----------
+   Read at 2× and above, a window's treble would fold back down as grit.
+   Each window also travels as half, quarter and eighth-rate copies,
+   low-passed for their rate (windowed sinc, 31 taps), and the worklet
+   reads the copy that suits the speed.
+
+   Building them is ~20 M multiply-adds a window: on the main thread that
+   froze the page for a few hundred ms on a fast spin (the record jumped
+   under the hand), so it runs in a small Worker. mipLevels() is
+   self-contained — it is serialised into the Worker's source — and is
+   also the fallback where no Worker can start. */
+
+function mipLevels(l: Float32Array, r: Float32Array): Float32Array[][] {
+  const n = 31;
+  const m = (n - 1) / 2;
+  const fc = 0.22; /* of the input rate: just under the new Nyquist */
+  const taps = new Float32Array(n);
+  let sum = 0;
+  for (let k = 0; k < n; k++) {
+    const x = k - m;
+    const sinc = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+    const win = 0.42 - 0.5 * Math.cos((2 * Math.PI * k) / (n - 1)) + 0.08 * Math.cos((4 * Math.PI * k) / (n - 1));
+    taps[k] = sinc * win;
+    sum += taps[k];
+  }
+  for (let k = 0; k < n; k++) taps[k] /= sum;
+  const halve = (x: Float32Array): Float32Array => {
+    const len = x.length;
+    const out = new Float32Array(Math.ceil(len / 2));
+    for (let j = 0; j < out.length; j++) {
+      const c = 2 * j - m;
+      let acc = 0;
+      for (let k = 0; k < n; k++) {
+        const i = c + k;
+        acc += taps[k] * x[i < 0 ? 0 : i >= len ? len - 1 : i];
+      }
+      out[j] = acc;
+    }
+    return out;
+  };
+  const levels: Float32Array[][] = [[l, r]];
+  for (let k = 1; k <= 3; k++) {
+    const [pl, pr] = levels[k - 1];
+    if (pl.length < 64) break;
+    levels.push([halve(pl), halve(pr)]);
+  }
+  return levels;
+}
+
+let mipWorker: Worker | null | undefined;
+let mipSeq = 0;
+const mipWaiting = new Map<number, (levels: Float32Array[][]) => void>();
+
+function startMipWorker(): Worker | null {
+  try {
+    const src =
+      'const mipLevels = (' + mipLevels.toString() + ');\n' +
+      'onmessage = (e) => { const { id, l, r } = e.data; const levels = mipLevels(l, r);' +
+      ' postMessage({ id, levels }, levels.flatMap((pl) => [pl[0].buffer, pl[1].buffer])); };\n';
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { name: 'amc-scratch-mips' });
+    w.onmessage = (e: MessageEvent) => {
+      const { id, levels } = e.data as { id: number; levels: Float32Array[][] };
+      const done = mipWaiting.get(id);
+      mipWaiting.delete(id);
+      if (done) done(levels);
+    };
+    w.onerror = () => {
+      /* the windows in flight are lost (they were transferred): those
+         blocks fail and are decoded again on the next approach */
+      for (const done of mipWaiting.values()) done([]);
+      mipWaiting.clear();
+      mipWorker = null;
+    };
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+/** The window and its pre-filtered copies, built off the main thread. */
+function buildLevels(l: Float32Array, r: Float32Array): Promise<Float32Array[][]> {
+  if (mipWorker === undefined) mipWorker = startMipWorker();
+  const w = mipWorker;
+  if (!w) return Promise.resolve(mipLevels(l, r));
+  return new Promise((resolve) => {
+    const id = ++mipSeq;
+    mipWaiting.set(id, resolve);
+    w.postMessage({ id, l, r }, [l.buffer, r.buffer]);
+  });
 }
 
 let voice: ScratchVoice | null = null;

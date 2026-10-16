@@ -223,7 +223,6 @@ function tick(): boolean {
     }
     if (mode === 'voice' && v) {
       v.setVolume(userVolume());
-      v.hand(handPos, vel);
     } else if (mode === 'rate') {
       rateDrive(vel);
     }
@@ -282,6 +281,8 @@ function grab(e: PointerEvent): void {
     /* caught again on its way back to speed: carry on from where it is */
     handPos = shown;
     if (mainQuiet) quietMain();
+    /* the hand is on it now, even before it moves */
+    if (mode === 'voice' && voice) voice.hand([performance.now(), handPos]);
   }
   shown = handPos;
   phase = 'hold';
@@ -296,15 +297,27 @@ function grab(e: PointerEvent): void {
 
 function move(e: PointerEvent): void {
   if (phase !== 'hold' || e.pointerId !== pointerId) return;
-  const deg = deckAngleAt(e.clientX, e.clientY);
-  if (deg === null) return;
-  let d = deg - lastDeg;
-  if (d > 180) d -= 360;
-  else if (d < -180) d += 360;
-  lastDeg = deg;
+  /* Every sample the pointer took since the last event (a mouse reports
+     far more often than the screen draws), each with its own timestamp:
+     the voice replays this path, so the finer and truer it is, the
+     smoother the sound. */
+  const all = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+  const list = all.length ? all : [e];
   const dur = pb.getDuration();
-  handPos = Math.max(0, Math.min(Math.max(0, dur - 0.1), handPos + d / DEG_PER_SEC));
-  moves.push({ t: performance.now(), pos: handPos });
+  const pts: number[] = [];
+  for (const ev of list) {
+    const deg = deckAngleAt(ev.clientX, ev.clientY);
+    if (deg === null) continue;
+    let d = deg - lastDeg;
+    if (d > 180) d -= 360;
+    else if (d < -180) d += 360;
+    lastDeg = deg;
+    handPos = Math.max(0, Math.min(Math.max(0, dur - 0.1), handPos + d / DEG_PER_SEC));
+    const t = ev.timeStamp > 0 ? ev.timeStamp : performance.now();
+    moves.push({ t, pos: handPos });
+    pts.push(t, handPos);
+  }
+  if (mode === 'voice' && voice) voice.hand(pts);
 }
 
 /* ---------- release ---------- */
