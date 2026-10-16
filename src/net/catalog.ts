@@ -51,6 +51,7 @@ function asEntry(r: Record<string, unknown>): CatalogEntry {
   return {
     collectionId: Number(r['collectionId']) || 0,
     trackId: Number(r['trackId']) || undefined,
+    artistId: Number(r['artistId']) || undefined,
     artistName: String(r['artistName'] || ''),
     collectionName: String(r['collectionName'] || ''),
     trackName: r['trackName'] != null ? String(r['trackName']) : undefined,
@@ -108,6 +109,12 @@ function flipComma(s: string): string {
   return m ? m[2] + ' ' + m[1] : s;
 }
 
+/** The local album's artist names the catalog artist (either spelling). */
+function sameArtist(al: Album, name: string): boolean {
+  const ca = norm(name);
+  return ca === norm(al.artist) || ca === norm(flipComma(al.artist));
+}
+
 function scoreCandidate(al: Album, c: CatalogEntry): number {
   let s = 0;
   const cn = norm(stripVersionSuffix(c.collectionName));
@@ -138,8 +145,60 @@ function scoreCandidate(al: Album, c: CatalogEntry): number {
 
 async function searchCollections(al: Album): Promise<CatalogEntry[]> {
   const term = (al.artist + ' ' + al.album).trim();
-  const data = (await apiGet('search?media=music&entity=album&limit=10&term=' + encodeURIComponent(term))) as ItunesResponse;
+  const data = (await apiGet('search?media=music&entity=album&limit=25&term=' + encodeURIComponent(term))) as ItunesResponse;
   return (data.results || []).map(asEntry).filter((e) => e.collectionId > 0);
+}
+
+/* The search ranks by popularity across the whole term, so a famous
+   artist's name drowns the album's: "Michael Jackson Dangerous" returns 25
+   compilations, singles and remixes, and not Dangerous. The artist's own
+   album list always has it. */
+
+/** The catalog id of the local album's artist: from the search results
+    when one of them is by that artist, else one artist search. */
+async function artistIdFor(al: Album, seen: CatalogEntry[]): Promise<number> {
+  const hit = seen.find((e) => e.artistId && sameArtist(al, e.artistName));
+  if (hit && hit.artistId) return hit.artistId;
+  const name = flipComma(al.artist).trim();
+  if (!name) return 0;
+  const data = (await apiGet('search?media=music&entity=musicArtist&limit=10&term=' + encodeURIComponent(name))) as ItunesResponse;
+  const rows = data.results || [];
+  const exact = rows.find((r) => sameArtist(al, String(r['artistName'] || '')));
+  return exact ? Number(exact['artistId']) || 0 : 0;
+}
+
+/** Every album the catalog lists for an artist. */
+async function artistAlbums(artistId: number): Promise<CatalogEntry[]> {
+  const data = (await apiGet('lookup?id=' + artistId + '&entity=album&limit=200')) as ItunesResponse;
+  return (data.results || [])
+    .filter((r) => r['wrapperType'] === 'collection')
+    .map(asEntry)
+    .filter((e) => e.collectionId > 0);
+}
+
+/** Name and artist both agree: a match the search itself can be trusted
+    with (3 for the name, 2 for the artist). */
+const STRONG = 5;
+
+/** The best catalog album for a local one, or null below a plausible
+    score: the plain search first, the artist's album list when that finds
+    nothing named like the album. */
+async function bestCollection(al: Album): Promise<CatalogEntry | null> {
+  const byScore = (list: CatalogEntry[]): CatalogEntry[] => list.slice().sort((a, b) => scoreCandidate(al, b) - scoreCandidate(al, a));
+  let candidates = byScore(await searchCollections(al));
+  if (!candidates.length || scoreCandidate(al, candidates[0]) < STRONG) {
+    try {
+      const artistId = await artistIdFor(al, candidates);
+      if (artistId) {
+        const known = new Set(candidates.map((c) => c.collectionId));
+        candidates = byScore(candidates.concat((await artistAlbums(artistId)).filter((c) => !known.has(c.collectionId))));
+      }
+    } catch (e) {
+      /* the search's own candidates still stand */
+      logErr('catalog', 'The artist lookup failed for ' + al.artist, (e as Error).message);
+    }
+  }
+  return candidates.length && scoreCandidate(al, candidates[0]) >= 2 ? candidates[0] : null;
 }
 
 async function lookupCollection(id: number): Promise<{ collection: CatalogEntry; songs: CatalogEntry[] } | null> {
@@ -176,8 +235,9 @@ function cacheCatalog(folder: ConnectedFolder, id: number, m: { collection: Cata
 }
 
 /** The whole per-album flow: remembered collection → sidecar cache →
-    search + score + lookup (two requests). Returns null when nothing in
-    the catalog plausibly matches. */
+    search + score + lookup (two requests; up to two more when the search
+    misses and the artist's album list is consulted). Returns null when
+    nothing in the catalog plausibly matches. */
 export async function fetchCatalogFor(folder: ConnectedFolder, al: Album): Promise<CatalogMatch | null> {
   const remembered = collectionIdFor(folder.folderId, al.key);
   if (remembered) {
@@ -186,10 +246,9 @@ export async function fetchCatalogFor(folder: ConnectedFolder, al: Album): Promi
   }
   let id = remembered;
   if (!id) {
-    const candidates = await searchCollections(al);
-    candidates.sort((a, b) => scoreCandidate(al, b) - scoreCandidate(al, a));
-    if (!candidates.length || scoreCandidate(al, candidates[0]) < 2) return null;
-    id = candidates[0].collectionId;
+    const best = await bestCollection(al);
+    if (!best) return null;
+    id = best.collectionId;
   }
   const got = await lookupCollection(id);
   if (!got) return null;

@@ -348,7 +348,7 @@ export async function openCatalogReview(albumKey: string): Promise<void> {
   diffSource = 'catalog';
   diffAlbum = al;
   diffRows = [];
-  showPanel('Catalog match — ' + al.album, '<div class="repair-wait"><span class="spinner"></span>Searching the iTunes catalog…</div>', null, 'Batched by album — two requests, cached to the sidecar.');
+  showPanel('Catalog match — ' + al.album, '<div class="repair-wait"><span class="spinner"></span>Searching the iTunes catalog…</div>', null, 'Batched by album — a few requests, cached to the sidecar.');
 
   let match;
   try {

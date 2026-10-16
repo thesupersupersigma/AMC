@@ -175,6 +175,8 @@ export interface LrcLine {
 export interface CatalogEntry {
   collectionId: number;
   trackId?: number;
+  /** The catalog's artist id (search results; not in older caches). */
+  artistId?: number;
   artistName: string;
   collectionName: string;
   trackName?: string;
